@@ -1,0 +1,33 @@
+{
+	"editor.formatOnSave": true,
+	"platformio-ide.disablePIOHomeStartup": true,
+	"editor.wordWrap": "bounded",
+	"editor.insertSpaces": false,
+	"C_Cpp.default.cStandard": "c17",
+	"C_Cpp.default.cppStandard": "c++20",
+	"editor.detectIndentation": false,
+	"[cpp]": {
+		"editor.defaultFormatter": "ms-vscode.cpptools"
+	},
+	"editor.tabSize": 4,
+	"git.openRepositoryInParentFolders": "always",
+	"C_Cpp.clang_format_fallbackStyle": "{ BasedOnStyle: LLVM, UseTab: ForContinuationAndIndentation, AlignTrailingComments: Never, IndentWidth: 4, TabWidth: 4, BreakBeforeBraces: Attach, AllowShortIfStatementsOnASingleLine: true, IndentCaseLabels: false, ColumnLimit: 0, AccessModifierOffset: -4, NamespaceIndentation: All, FixNamespaceComments: false }",
+	"editor.wordWrapColumn": 120,
+	"editor.indentSize": "tabSize",
+	"files.associations": {
+		"claim.h": "c",
+		"random": "cpp",
+		"*.tcc": "cpp",
+		"array": "cpp",
+		"deque": "cpp",
+		"list": "cpp",
+		"string": "cpp",
+		"unordered_map": "cpp",
+		"vector": "cpp",
+		"string_view": "cpp",
+		"memory": "cpp",
+		"initializer_list": "cpp",
+		"new": "cpp",
+		"regex": "cpp"
+	}
+}

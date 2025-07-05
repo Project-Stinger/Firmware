@@ -1,0 +1,59 @@
+#include "global.h"
+
+const char *qr = "11111110010010110001001111111\n"
+				 "10000010100110110110101000001\n"
+				 "10111010111110110111001011101\n"
+				 "10111010011100110011101011101\n"
+				 "10111010100001011110001011101\n"
+				 "10000010110100110001001000001\n"
+				 "11111110101010101010101111111\n"
+				 "00000000110010000110000000000\n"
+				 "11010011001011011000001110110\n"
+				 "11111101001100001100101001001\n"
+				 "01110010011001001011110011110\n"
+				 "11000100000001010010100010110\n"
+				 "11111111100110011100111001011\n"
+				 "11101001101010000001110000000\n"
+				 "11111111001100101000101111111\n"
+				 "01101000001001011100111001010\n"
+				 "00000110100110001110100100010\n"
+				 "00011100001110101010111101001\n"
+				 "10101111101001000110010110011\n"
+				 "00110000101100101100110110011\n"
+				 "10001110001011100011111110100\n"
+				 "00000000100011011111100010111\n"
+				 "11111110111000101010101010010\n"
+				 "10000010001111001000100011110\n"
+				 "10111010001001011110111110001\n"
+				 "10111010110010101111101111100\n"
+				 "10111010011101000111100011101\n"
+				 "10000010101011110101110010010\n"
+				 "11111110110110101110111111010";
+
+void onQrFullDraw(MenuItem *item) {
+	if (!item->fullRedraw) return;
+	item->fullRedraw = false;
+	u8 lines = 1;
+	u32 len = strlen(qr);
+	for (u32 i = 0; i < len - 1; i++) {
+		if (qr[i] == '\n') {
+			lines++;
+		}
+	}
+	u8 scaling = 1;
+	for (; lines * scaling < SCREEN_HEIGHT * 7 / 8; scaling++)
+		;
+	scaling--;
+	u8 dim = lines * scaling;
+	u8 startX = SCREEN_HEIGHT / 2 - dim / 2;
+	u8 startY = SCREEN_HEIGHT / 2 - dim / 2;
+	tft.fillScreen(ST7735_WHITE);
+	for (u8 row = 0; row < lines; row++) {
+		for (u8 col = 0; col < lines; col++) {
+			tft.fillRect(startX + col * scaling, startY + row * scaling, scaling, scaling, qr[row * (lines + 1) + col] == '1' ? ST7735_BLACK : ST7735_WHITE);
+		}
+	}
+	tft.setTextColor(ST7735_BLACK);
+	SET_DEFAULT_FONT;
+	printCentered("github.com/bastian2001/Stinger-Docs/wiki", (SCREEN_WIDTH + startX * 2 + dim) / 2, SCREEN_HEIGHT / 4, (SCREEN_WIDTH - startX * 2 - dim) * 3 / 4 + 4, 4, YADVANCE_RELAXED, ClipBehavior::PRINT_LAST_LINE_CENTERED);
+}
