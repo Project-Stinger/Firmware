@@ -28,6 +28,7 @@
 		"memory": "cpp",
 		"initializer_list": "cpp",
 		"new": "cpp",
-		"regex": "cpp"
+		"regex": "cpp",
+		"cstdint": "cpp"
 	}
 }

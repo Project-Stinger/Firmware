@@ -1,8 +1,77 @@
 #include "Fonts/FreeSans9pt7b.h"
 #include "global.h"
+#include "model.h" // Our exported ML model
 
 volatile u8 setupDone = 0b00;
 volatile bool setup1CanStart = false;
+
+#if HW_VERSION == 2 // All ML-related code is specific to v2 hardware
+
+// --- ML Model Globals and Declarations ---
+
+// Define the possible states for our pre-fire logic, with unique names
+enum PreFireState {
+	PREFIRE_STATE_OFF,
+	PREFIRE_STATE_PREDICTED,
+	PREFIRE_STATE_CONFIRMED
+};
+
+PreFireState preFireState = PREFIRE_STATE_OFF; // Start in the OFF state
+
+// Configuration for the state machine
+const int CONFIRMATION_THRESHOLD = 50; // 50ms of consistent prediction
+int predictionStreakCounter = 0;
+
+// Keep track of the previous trigger state to detect when a shot is complete
+u8 previousTriggerState = 0;
+
+// Buffers and Features for Real-Time Inference
+const int FEATURE_WINDOW_SIZE = 100; // 100ms window
+float accel_x_buffer[FEATURE_WINDOW_SIZE] = {0};
+float accel_y_buffer[FEATURE_WINDOW_SIZE] = {0};
+float accel_z_buffer[FEATURE_WINDOW_SIZE] = {0};
+float gyro_x_buffer[FEATURE_WINDOW_SIZE] = {0};
+float gyro_y_buffer[FEATURE_WINDOW_SIZE] = {0};
+float gyro_z_buffer[FEATURE_WINDOW_SIZE] = {0};
+int buffer_index = 0;
+float features[24];
+
+// Declare external functions and variables from other parts of the firmware
+// that our new logic needs to use.
+extern void setFlywheelSpeed(u32);
+extern Profile profiles[NUM_PROFILES];
+extern u8 currentProfile;
+
+// Helper functions to calculate statistics
+float calculate_mean(float *arr, int size) {
+	float sum = 0;
+	for (int i = 0; i < size; i++)
+		sum += arr[i];
+	return sum / size;
+}
+
+float calculate_std(float *arr, int size, float mean) {
+	float sum = 0;
+	for (int i = 0; i < size; i++)
+		sum += (arr[i] - mean) * (arr[i] - mean);
+	return sqrt(sum / size);
+}
+
+float calculate_min(float *arr, int size) {
+	float min_val = arr[0];
+	for (int i = 1; i < size; i++)
+		if (arr[i] < min_val) min_val = arr[i];
+	return min_val;
+}
+
+float calculate_max(float *arr, int size) {
+	float max_val = arr[0];
+	for (int i = 1; i < size; i++)
+		if (arr[i] > max_val) max_val = arr[i];
+	return max_val;
+}
+
+#endif // HW_VERSION == 2
 
 void setup() {
 	if (powerOnResetMagicNumber == 0xdeadbeefdeadbeef)
@@ -174,42 +243,91 @@ void loop1() {
 			standbyOffLoop();
 		if (speakerLoopOnFastCore || speakerLoopOnFastCore2)
 			speakerLoop();
-#if ENABLE_DEBUG_GYRO
-		static elapsedMillis c = 0;
-		if (c >= 5) {
-			c = 0;
-			static u8 gyro = false;
-			if (Serial.available()) {
-				Serial.read();
-				++gyro;
-			}
-			switch (gyro) {
-			case 1:
-				Serial.printf("%d %d %d\n", gyroDataRaw[0], gyroDataRaw[1], gyroDataRaw[2]);
-				break;
-			case 2:
-				Serial.printf("%d %d %d\n", accelDataRaw[0], accelDataRaw[1], accelDataRaw[2]);
-				break;
-			case 3:
-				Serial.printf("%f %f %f\n", roll.getf32(), pitch.getf32(), yaw.getf32());
-				break;
-			case 4:
-				Serial.printf("%.3f %.3f %.3f\n", fix32(vAccel).getf32(), fix32(rAccel).getf32(), fix32(fAccel).getf32());
-				break;
-			case 5: {
-				if (operationState >= STATE_PUSH && operationState <= STATE_RETRACT) {
-					Serial.printf("%d %d\n", (solenoidCurrent * 1000).geti32(), accelDataRaw[1]);
+
+		// =================================================================
+		// =========== START OF NEW MACHINE LEARNING INFERENCE LOGIC ===========
+		// =================================================================
+
+		// 1. BUFFER DATA: Add the latest sensor readings to our circular buffers
+		accel_x_buffer[buffer_index] = accelDataRaw[0];
+		accel_y_buffer[buffer_index] = accelDataRaw[1];
+		accel_z_buffer[buffer_index] = accelDataRaw[2];
+		gyro_x_buffer[buffer_index] = gyroDataRaw[0];
+		gyro_y_buffer[buffer_index] = gyroDataRaw[1];
+		gyro_z_buffer[buffer_index] = gyroDataRaw[2];
+
+		// 2. CALCULATE FEATURES:
+		features[0] = calculate_mean(accel_x_buffer, FEATURE_WINDOW_SIZE);
+		features[1] = calculate_std(accel_x_buffer, FEATURE_WINDOW_SIZE, features[0]);
+		features[2] = calculate_min(accel_x_buffer, FEATURE_WINDOW_SIZE);
+		features[3] = calculate_max(accel_x_buffer, FEATURE_WINDOW_SIZE);
+		features[4] = calculate_mean(accel_y_buffer, FEATURE_WINDOW_SIZE);
+		features[5] = calculate_std(accel_y_buffer, FEATURE_WINDOW_SIZE, features[4]);
+		features[6] = calculate_min(accel_y_buffer, FEATURE_WINDOW_SIZE);
+		features[7] = calculate_max(accel_y_buffer, FEATURE_WINDOW_SIZE);
+		features[8] = calculate_mean(accel_z_buffer, FEATURE_WINDOW_SIZE);
+		features[9] = calculate_std(accel_z_buffer, FEATURE_WINDOW_SIZE, features[8]);
+		features[10] = calculate_min(accel_z_buffer, FEATURE_WINDOW_SIZE);
+		features[11] = calculate_max(accel_z_buffer, FEATURE_WINDOW_SIZE);
+		features[12] = calculate_mean(gyro_x_buffer, FEATURE_WINDOW_SIZE);
+		features[13] = calculate_std(gyro_x_buffer, FEATURE_WINDOW_SIZE, features[12]);
+		features[14] = calculate_min(gyro_x_buffer, FEATURE_WINDOW_SIZE);
+		features[15] = calculate_max(gyro_x_buffer, FEATURE_WINDOW_SIZE);
+		features[16] = calculate_mean(gyro_y_buffer, FEATURE_WINDOW_SIZE);
+		features[17] = calculate_std(gyro_y_buffer, FEATURE_WINDOW_SIZE, features[16]);
+		features[18] = calculate_min(gyro_y_buffer, FEATURE_WINDOW_SIZE);
+		features[19] = calculate_max(gyro_y_buffer, FEATURE_WINDOW_SIZE);
+		features[20] = calculate_mean(gyro_z_buffer, FEATURE_WINDOW_SIZE);
+		features[21] = calculate_std(gyro_z_buffer, FEATURE_WINDOW_SIZE, features[20]);
+		features[22] = calculate_min(gyro_z_buffer, FEATURE_WINDOW_SIZE);
+		features[23] = calculate_max(gyro_z_buffer, FEATURE_WINDOW_SIZE);
+
+		buffer_index = (buffer_index + 1) % FEATURE_WINDOW_SIZE;
+
+		// 3. PREDICT:
+		int prediction = eloquent::ml::port::RandomForest().predict(features);
+
+		// 4. UPDATE STATE MACHINE based on the prediction
+		if (operationState == STATE_IDLE || operationState == STATE_REV) {
+			switch (preFireState) {
+			case PREFIRE_STATE_OFF:
+				if (prediction == 1) {
+					preFireState = PREFIRE_STATE_PREDICTED;
+					setFlywheelSpeed(profiles[currentProfile].idleRpm);
+					predictionStreakCounter = 1;
 				}
-			} break;
-			case 6:
-				Serial.printf("%d %d\n", adcConversions[CONV_RESULT_ISOLENOID], adcConversions[CONV_RESULT_IBAT]);
 				break;
-			default:
-				gyro = 0;
+
+			case PREFIRE_STATE_PREDICTED:
+				if (prediction == 1) {
+					predictionStreakCounter++;
+					if (predictionStreakCounter >= CONFIRMATION_THRESHOLD) {
+						preFireState = PREFIRE_STATE_CONFIRMED;
+						setFlywheelSpeed(profiles[currentProfile].rpm);
+					}
+				} else {
+					preFireState = PREFIRE_STATE_OFF;
+					if (operationState == STATE_IDLE) {
+						setFlywheelSpeed(0);
+					}
+					predictionStreakCounter = 0;
+				}
+				break;
+
+			case PREFIRE_STATE_CONFIRMED:
+				if (operationState == STATE_IDLE) {
+					preFireState = PREFIRE_STATE_OFF;
+					predictionStreakCounter = 0;
+				}
 				break;
 			}
 		}
-#endif // ENABLE_DEBUG_GYRO
+		previousTriggerState = triggerState;
+
+		// ===============================================================
+		// =========== END OF NEW MACHINE LEARNING INFERENCE LOGIC ===========
+		// ===============================================================
+
 #endif // HW_VERSION == 2
 	}
 }

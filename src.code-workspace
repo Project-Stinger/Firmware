@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "src"
+		},
+		{
+			"path": "lib"
+		},
+		{
+			"path": "python"
+		},
+		{
+			"path": "test"
+		},
+		{
+			"path": "include"
+		}
+	]
+}
