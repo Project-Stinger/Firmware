@@ -7,7 +7,7 @@ def prepare_data():
     Loads the raw IMU data, creates labels for pre-fire events,
     engineers features using a sliding window, and saves the result.
     """
-    print("--- ML-Stinger: Part 1 - Data Preparation (500ms Pre-Fire Window) ---")
+    print("--- ML-Stinger: Part 1 - Data Preparation (100ms Pre-Fire Window) ---")
     
     # --- 1. Load Data ---
     print("\n[Step 1/4] Loading and cleaning raw data...")
@@ -35,7 +35,7 @@ def prepare_data():
     # --- 2. Labeling ---
     print("\n[Step 2/4] Labeling pre-fire signals...")
     # *** THIS IS THE VALUE YOU ASKED TO CHANGE ***
-    PREDICTION_WINDOW_MS = 500 
+    PREDICTION_WINDOW_MS = 500
     SENSOR_HZ = 1000 # This should match the firmware's loop rate
     window_samples = int(SENSOR_HZ * (PREDICTION_WINDOW_MS / 1000.0))
     print(f"Using a pre-fire prediction window of {PREDICTION_WINDOW_MS} ms ({window_samples} samples).")
@@ -83,3 +83,4 @@ def prepare_data():
 
 if __name__ == '__main__':
     prepare_data()
+
