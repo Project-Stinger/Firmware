@@ -170,11 +170,17 @@ void eepromMigrate(u8 major, u8 minor, u8 patch) {
 		eepromSetInAllProfiles(EEPROM_POS_BURST_KEEP_FIRE, false);
 		for (int i = 0; i < 4; i++) {
 			EEPROM.put(EEPROM_POS_ESC_TEMP_OFFSETS + i, (i8)0);
-		}
+		 }
+
+#if HW_VERSION == 2
+		// Add default ML timeout setting
+		u16 mlTimeout = DEFAULT_PRESPIN_TIMEOUT_MS;
+		EEPROM.put(EEPROM_POS_ML_TIMEOUT, mlTimeout);
+#endif
 
 		major = 2;
-		minor = 2;
-		patch = 0;
+		minor = 1;
+		patch = 1;
 	}
 	if (major == 2 && minor == 2 && patch == 0) {
 		// no changes in EEPROM contents from 2.2.0 to 2.2.1
@@ -268,6 +274,14 @@ void eepromInit() {
 		// firmware downgrade: clear EEPROM
 		requestClearEeprom(eepromMajorVersion, eepromMinorVersion, eepromPatchVersion);
 	}
+	
+	EEPROM.get(EEPROM_POS_IDLE_ENABLED, idleEnabled);
+	
+#if HW_VERSION == 2
+	// Load ML timeout setting
+	EEPROM.get(EEPROM_POS_ML_TIMEOUT, mlPreSpinTimeout);
+#endif
+	
 	initMenu();
 	joystickInit(true);
 	initEscLayout();

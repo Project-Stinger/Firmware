@@ -100,6 +100,7 @@ enum EepromPos {
 #endif
 	EEPROM_POS_IDLE_ONLY_WITH_MAG = 2188,
 	EEPROM_POS_ESC_TEMP_OFFSETS = 2189,
+	EEPROM_POS_ML_TIMEOUT = 2193, // Add ML timeout position
 
 	// Runtime options, not stored in EEPROM
 	EEPROM_RUNTIME_OPTION = 0x7FFF,

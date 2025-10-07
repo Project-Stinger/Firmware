@@ -201,7 +201,8 @@ void initMenu() {
 #if HW_VERSION == 1
 		->addChild(new MenuItem(&idleEnabled, false, EEPROM_POS_IDLE_ENABLED, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
 #elif HW_VERSION == 2
-		->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 7, (const char *)idleStrings, 9, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+        ->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 8, (const char *)idleStrings, 12, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+        ->addChild(new MenuItem(VariableType::U16, &mlPreSpinTimeout, DEFAULT_PRESPIN_TIMEOUT_MS, 50, 100, 2000, 1, 0, EEPROM_POS_ML_TIMEOUT, false, "mlTimeout", "ML Idle Timeout", "Time in ms the motors will idle after ML prediction before spinning down"))
 #endif
 #ifdef USE_TOF
 		->addChild(new MenuItem(&idleOnlyWithMag, true, EEPROM_POS_IDLE_ONLY_WITH_MAG, false, "idleOnlyWithMag", HW_VERSION == 2 ? "Idle only with mag" : "No mag no idle", "Preview the idling RPM in the menu"))
@@ -398,7 +399,7 @@ void initMenu() {
 		->addChild(new MenuItem(VariableType::U32, &tournamentMaxRpm, DEFAULT_MAX_RPM, 1000, 20000, 80000, 1, 0, EEPROM_POS_TOURNAMENT_MAXRPM, false, "tournamentMaxRpm", "Max RPM", "Maximum RPM allowed in tournament mode"))
 		->addChild(new MenuItem(VariableType::U8, &tournamentMaxDps, HW_VERSION == 2 ? 30 : 18, 1, 2, 40, 1, 0, EEPROM_POS_TOURNAMENT_MAXDPS, false, "tournamentMaxDps", "Max DPS", "Maximum darts per second allowed in tournament mode"))
 		->addChild(new MenuItem(&allowSemiAuto, true, EEPROM_POS_TOURNAMENT_ALLOW_SEMI_AUTO, false, "allowSemiAuto", "Allow Semi-Auto", "Allow semi-auto in tournament mode"))
-		->addChild(new MenuItem(&allowFullAuto, true, EEPROM_POS_TOURNAMENT_ALLOW_FULL_AUTO, false, "allowFullAuto", "Allow Full-Auto", "Allow full-auto in tournament mode"))
+		->addChild(new MenuItem(&allowFullAuto, true, EEPROM_POS_TOURNAMENT_ALLOW_FULL_AUTO, false, "allowFullAuto", "Allow full-auto in tournament mode"))
 		->addChild(new MenuItem(&tournamentInvertScreen, false, EEPROM_POS_TOURNAMENT_INVERT_SCREEN, false, "tournamentInvertScreen", "Invert Screen", "Invert the screen in tournament mode"))
 		->addChild(new MenuItem(&tournamentBlockMenu, false, EEPROM_POS_TOURNAMENT_BLOCK_MENU, false, "tournamentBlockMenu", HW_VERSION == 2 ? "Block Menu Access" : "Block Menu", "Menu access can be blocked in tournament mode"))
 		->addChild(tournamentPage2);

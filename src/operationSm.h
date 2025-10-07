@@ -10,15 +10,16 @@ extern bool idleOnlyWithMag;
 extern bool idleEnabled;
 #elif HW_VERSION == 2
 extern u8 idleEnabled;
-const char idleStrings[8][9] = {
-	"Off",
-	"Always",
-	"+/- 10°",
-	"+/- 15°",
-	"+/- 20°",
-	"+/- 25°",
-	"+/- 30°",
-	"+/- 35°",
+const char idleStrings[9][12] = {
+    "Off",
+    "Always",
+    "+/- 10°",
+    "+/- 15°",
+    "+/- 20°",
+    "+/- 25°",
+    "+/- 30°",
+    "+/- 35°",
+    "ML Predict",
 };
 extern u8 maxFireAngleSetting;
 const char fireAngleStrings[6][9] = {
@@ -30,6 +31,19 @@ const char fireAngleStrings[6][9] = {
 	"No limit",
 };
 extern fix32 actualDps;
+
+// ML Pre-fire state declarations
+enum PreFireState { 
+    PREFIRE_STATE_OFF,
+    PREFIRE_STATE_PREDICTED,
+    PREFIRE_STATE_CONFIRMED,
+    PREFIRE_STATE_SPINNING 
+};
+
+extern PreFireState preFireState;
+extern u16 mlPreSpinTimeout;
+
+#define DEFAULT_PRESPIN_TIMEOUT_MS 500
 #endif
 extern bool bootUnlockNeeded;
 extern u16 rampdownTime, rampupTimeout;

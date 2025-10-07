@@ -1,6 +1,7 @@
 #include "Fonts/FreeSans9pt7b.h"
 #include "global.h"
 #include "model.h" // Our exported ML model
+#include <cfloat> // For FLT_MAX
 
 volatile u8 setupDone = 0b00;
 volatile bool setup1CanStart = false;
@@ -14,14 +15,17 @@ extern i32 targetRpm;
 extern i32 idleRpm;
 extern i32 rearRpm;
 
-enum PreFireState { PREFIRE_STATE_OFF,
-					PREFIRE_STATE_PREDICTED,
-					PREFIRE_STATE_CONFIRMED };
+// Remove the enum definition from here - it's now in operationSm.h
 PreFireState preFireState = PREFIRE_STATE_OFF;
 
-const int CONFIRMATION_THRESHOLD_MS = 50;
+const int CONFIRMATION_THRESHOLD_MS = 10;  // Reduced from 20ms to 10ms - even faster!
 const int ML_INFERENCE_INTERVAL_MS = 10;
+// DEFAULT_PRESPIN_TIMEOUT_MS is already defined in operationSm.h, don't redefine it here
 int predictionStreakCounter = 0;
+elapsedMillis preSpinTimer = 0; // Add timer for pre-spin timeout
+
+// Make timeout configurable
+u16 mlPreSpinTimeout = DEFAULT_PRESPIN_TIMEOUT_MS;
 
 const int FEATURE_WINDOW_SIZE = 50;
 float accel_x_buffer[FEATURE_WINDOW_SIZE] = {0};
@@ -32,6 +36,98 @@ float gyro_y_buffer[FEATURE_WINDOW_SIZE] = {0};
 float gyro_z_buffer[FEATURE_WINDOW_SIZE] = {0};
 int buffer_index = 0;
 float features[24];
+
+// Instead of calculating all 24 features every 10ms, calculate incrementally:
+
+struct RunningStats {
+	float sum;
+	float sumSq;
+	float min;
+	float max;
+	int samples_seen; // Track how many real samples we've collected
+	bool needs_recalc;
+};
+
+RunningStats accel_x_stats = {0, 0, FLT_MAX, -FLT_MAX, 0, false};
+RunningStats accel_y_stats = {0, 0, FLT_MAX, -FLT_MAX, 0, false};
+RunningStats accel_z_stats = {0, 0, FLT_MAX, -FLT_MAX, 0, false};
+RunningStats gyro_x_stats = {0, 0, FLT_MAX, -FLT_MAX, 0, false};
+RunningStats gyro_y_stats = {0, 0, FLT_MAX, -FLT_MAX, 0, false};
+RunningStats gyro_z_stats = {0, 0, FLT_MAX, -FLT_MAX, 0, false};
+
+inline float fast_sqrt(float x) {
+	// Quake fast inverse square root adaptation
+	union {
+		float f;
+		uint32_t i;
+	} conv = {.f = x};
+	conv.i = 0x5f3759df - (conv.i >> 1);
+	float y = conv.f;
+	y = y * (1.5f - (x * 0.5f * y * y));
+	return x * y; // Return sqrt instead of inverse sqrt
+}
+
+inline void update_stats(RunningStats *stats, float *buffer, float new_val, float old_val) {
+	// Handle initial fill-up phase
+	if (stats->samples_seen < FEATURE_WINDOW_SIZE) {
+		stats->samples_seen++;
+		// During warmup, just add without subtracting
+		stats->sum += new_val;
+		stats->sumSq += new_val * new_val;
+
+		// Update min/max
+		if (new_val < stats->min) stats->min = new_val;
+		if (new_val > stats->max) stats->max = new_val;
+		return;
+	}
+
+	// Normal operation: sliding window
+	stats->sum -= old_val;
+	stats->sumSq -= old_val * old_val;
+	stats->sum += new_val;
+	stats->sumSq += new_val * new_val;
+
+	// Check if we need to recalculate min/max
+	// Use small epsilon for float comparison
+	const float epsilon = 0.001f;
+	if (fabsf(old_val - stats->min) < epsilon || fabsf(old_val - stats->max) < epsilon) {
+		stats->needs_recalc = true;
+	}
+
+	// Update min/max
+	if (stats->needs_recalc) {
+		// Full recalculation
+		stats->min = buffer[0];
+		stats->max = buffer[0];
+		for (int i = 1; i < FEATURE_WINDOW_SIZE; i++) {
+			if (buffer[i] < stats->min) stats->min = buffer[i];
+			if (buffer[i] > stats->max) stats->max = buffer[i];
+		}
+		stats->needs_recalc = false;
+	} else {
+		// Fast path
+		if (new_val < stats->min) stats->min = new_val;
+		if (new_val > stats->max) stats->max = new_val;
+	}
+}
+
+inline void get_features_from_stats(RunningStats *stats, float *features, int offset) {
+	// Only calculate valid features if we have enough samples
+	if (stats->samples_seen < FEATURE_WINDOW_SIZE) {
+		// Not enough data yet - return zeros
+		features[offset + 0] = 0.0f;
+		features[offset + 1] = 0.0f;
+		features[offset + 2] = 0.0f;
+		features[offset + 3] = 0.0f;
+		return;
+	}
+
+	float mean = stats->sum / FEATURE_WINDOW_SIZE;
+	features[offset + 0] = mean;
+	features[offset + 1] = fast_sqrt((stats->sumSq / FEATURE_WINDOW_SIZE) - (mean * mean));
+	features[offset + 2] = stats->min;
+	features[offset + 3] = stats->max;
+}
 
 // --- Helper functions to calculate statistics ---
 float calculate_mean(float *arr, int size) {
@@ -235,79 +331,113 @@ void loop1() {
 		// =================================================================
 		static elapsedMillis ml_timer = 0;
 
+		// Store old values before updating buffers
+		float old_accel_x = accel_x_buffer[buffer_index];
+		float old_accel_y = accel_y_buffer[buffer_index];
+		float old_accel_z = accel_z_buffer[buffer_index];
+		float old_gyro_x = gyro_x_buffer[buffer_index];
+		float old_gyro_y = gyro_y_buffer[buffer_index];
+		float old_gyro_z = gyro_z_buffer[buffer_index];
+
+		// Update buffers with new values
 		accel_x_buffer[buffer_index] = accelDataRaw[0];
 		accel_y_buffer[buffer_index] = accelDataRaw[1];
 		accel_z_buffer[buffer_index] = accelDataRaw[2];
 		gyro_x_buffer[buffer_index] = gyroDataRaw[0];
 		gyro_y_buffer[buffer_index] = gyroDataRaw[1];
 		gyro_z_buffer[buffer_index] = gyroDataRaw[2];
+
+		// Update running statistics
+		update_stats(&accel_x_stats, accel_x_buffer, accelDataRaw[0], old_accel_x);
+		update_stats(&accel_y_stats, accel_y_buffer, accelDataRaw[1], old_accel_y);
+		update_stats(&accel_z_stats, accel_z_buffer, accelDataRaw[2], old_accel_z);
+		update_stats(&gyro_x_stats, gyro_x_buffer, gyroDataRaw[0], old_gyro_x);
+		update_stats(&gyro_y_stats, gyro_y_buffer, gyroDataRaw[1], old_gyro_y);
+		update_stats(&gyro_z_stats, gyro_z_buffer, gyroDataRaw[2], old_gyro_z);
+
 		buffer_index = (buffer_index + 1) % FEATURE_WINDOW_SIZE;
 
-		if (ml_timer >= ML_INFERENCE_INTERVAL_MS) {
-			ml_timer = 0;
-
-			features[0] = calculate_mean(accel_x_buffer, FEATURE_WINDOW_SIZE);
-			features[1] = calculate_std(accel_x_buffer, FEATURE_WINDOW_SIZE, features[0]);
-			features[2] = calculate_min(accel_x_buffer, FEATURE_WINDOW_SIZE);
-			features[3] = calculate_max(accel_x_buffer, FEATURE_WINDOW_SIZE);
-			features[4] = calculate_mean(accel_y_buffer, FEATURE_WINDOW_SIZE);
-			features[5] = calculate_std(accel_y_buffer, FEATURE_WINDOW_SIZE, features[4]);
-			features[6] = calculate_min(accel_y_buffer, FEATURE_WINDOW_SIZE);
-			features[7] = calculate_max(accel_y_buffer, FEATURE_WINDOW_SIZE);
-			features[8] = calculate_mean(accel_z_buffer, FEATURE_WINDOW_SIZE);
-			features[9] = calculate_std(accel_z_buffer, FEATURE_WINDOW_SIZE, features[8]);
-			features[10] = calculate_min(accel_z_buffer, FEATURE_WINDOW_SIZE);
-			features[11] = calculate_max(accel_z_buffer, FEATURE_WINDOW_SIZE);
-			features[12] = calculate_mean(gyro_x_buffer, FEATURE_WINDOW_SIZE);
-			features[13] = calculate_std(gyro_x_buffer, FEATURE_WINDOW_SIZE, features[12]);
-			features[14] = calculate_min(gyro_x_buffer, FEATURE_WINDOW_SIZE);
-			features[15] = calculate_max(gyro_x_buffer, FEATURE_WINDOW_SIZE);
-			features[16] = calculate_mean(gyro_y_buffer, FEATURE_WINDOW_SIZE);
-			features[17] = calculate_std(gyro_y_buffer, FEATURE_WINDOW_SIZE, features[16]);
-			features[18] = calculate_min(gyro_y_buffer, FEATURE_WINDOW_SIZE);
-			features[19] = calculate_max(gyro_y_buffer, FEATURE_WINDOW_SIZE);
-			features[20] = calculate_mean(gyro_z_buffer, FEATURE_WINDOW_SIZE);
-			features[21] = calculate_std(gyro_z_buffer, FEATURE_WINDOW_SIZE, features[20]);
-			features[22] = calculate_min(gyro_z_buffer, FEATURE_WINDOW_SIZE);
-			features[23] = calculate_max(gyro_z_buffer, FEATURE_WINDOW_SIZE);
-
-			int prediction = eloquent::ml::port::RandomForest().predict(features);
-
-			if (operationState == STATE_OFF) {
-				switch (preFireState) {
-				case PREFIRE_STATE_OFF:
-					if (prediction == 1) {
-						preFireState = PREFIRE_STATE_PREDICTED;
-						forceNewOpState = STATE_RAMPUP; // REVERTED: Use state machine to ramp up
-						predictionStreakCounter = 1;
-					}
-					break;
-				case PREFIRE_STATE_PREDICTED:
-					if (prediction == 1) {
-						predictionStreakCounter++;
-						if (predictionStreakCounter * ML_INFERENCE_INTERVAL_MS >= CONFIRMATION_THRESHOLD_MS) {
-							preFireState = PREFIRE_STATE_CONFIRMED;
-						}
-					} else {
-						preFireState = PREFIRE_STATE_OFF;
-						forceNewOpState = STATE_RAMPDOWN; // REVERTED: Use state machine to ramp down
-						predictionStreakCounter = 0;
-					}
-					break;
-				case PREFIRE_STATE_CONFIRMED:
-					if (prediction == 0) {
-						preFireState = PREFIRE_STATE_OFF;
-						forceNewOpState = STATE_RAMPDOWN; // REVERTED: Use state machine to ramp down
-						predictionStreakCounter = 0;
-					}
-					break;
-				}
-			}
+		// Adaptive inference rate
+		int current_ml_interval = ML_INFERENCE_INTERVAL_MS;
+		if (preFireState == PREFIRE_STATE_OFF) {
+			current_ml_interval = 20; // Check less frequently when idle
+		} else {
+			current_ml_interval = ML_INFERENCE_INTERVAL_MS;
 		}
 
-		if (operationState != STATE_OFF && preFireState != PREFIRE_STATE_OFF) {
-			preFireState = PREFIRE_STATE_OFF;
-			predictionStreakCounter = 0;
+		if (ml_timer >= current_ml_interval) {
+			ml_timer = 0;
+
+			// Only run inference if we have enough samples
+			if (accel_x_stats.samples_seen < FEATURE_WINDOW_SIZE) {
+				// Still warming up, skip inference - do nothing this cycle
+			} else {
+				// Use optimized feature calculation
+				get_features_from_stats(&accel_x_stats, features, 0);
+				get_features_from_stats(&accel_y_stats, features, 4);
+				get_features_from_stats(&accel_z_stats, features, 8);
+				get_features_from_stats(&gyro_x_stats, features, 12);
+				get_features_from_stats(&gyro_y_stats, features, 16);
+				get_features_from_stats(&gyro_z_stats, features, 20);
+
+#ifdef PROFILE_ML
+				static uint32_t max_inference_us = 0;
+				uint32_t start = micros();
+				int prediction = eloquent::ml::port::RandomForest().predict(features);
+				uint32_t elapsed = micros() - start;
+				if (elapsed > max_inference_us) {
+					max_inference_us = elapsed;
+					Serial.printf("ML inference: %d us (max: %d)\n", elapsed, max_inference_us);
+				}
+#else
+				int prediction = eloquent::ml::port::RandomForest().predict(features);
+#endif
+
+				// Only manage pre-spin when in OFF state AND in ML idle mode
+				if (operationState == STATE_OFF && idleEnabled == 8) {
+					switch (preFireState) {
+					case PREFIRE_STATE_OFF:
+						if (prediction == 1) {
+							preFireState = PREFIRE_STATE_SPINNING; // Jump directly to spinning
+							preSpinTimer = 0;
+						}
+						break;
+
+					case PREFIRE_STATE_PREDICTED:
+					case PREFIRE_STATE_CONFIRMED:
+						// These states are no longer used for ML idle mode
+						// Jump directly to spinning
+						preFireState = PREFIRE_STATE_SPINNING;
+						preSpinTimer = 0;
+						break;
+
+					case PREFIRE_STATE_SPINNING:
+						// Retriggerable idle: any new prediction restarts the timeout
+						if (prediction == 1) {
+							preSpinTimer = 0; // Reset timer - keep spinning
+						}
+						
+						// Use configurable timeout
+						if (preSpinTimer >= mlPreSpinTimeout) {
+							// Timeout - return to OFF
+							preFireState = PREFIRE_STATE_OFF;
+							predictionStreakCounter = 0;
+						}
+						break;
+					}
+				} else if (idleEnabled != 8) {
+					// If not in ML mode, always clear pre-fire state
+					if (preFireState != PREFIRE_STATE_OFF) {
+						preFireState = PREFIRE_STATE_OFF;
+						predictionStreakCounter = 0;
+					}
+				} else if (operationState != STATE_OFF) {
+					// If we're firing or in any other state, clear the pre-fire
+					// This prevents twitching when returning from firing
+					preFireState = PREFIRE_STATE_OFF;
+					predictionStreakCounter = 0;
+				}
+			}
 		}
 #endif
 

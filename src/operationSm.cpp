@@ -14,10 +14,21 @@ bool idleEnabled = false;
 u8 idleEnabled = 0;
 const fix32 IDLE_5_DEG = fix32(5.0 * PI / 180.0);
 bool checkIdle() {
-	static bool lastIdleEnabled = false;
-	fix32 threshold = IDLE_5_DEG * idleEnabled + (lastIdleEnabled ? (IDLE_5_DEG / 3) : (-IDLE_5_DEG / 3));
-	lastIdleEnabled = idleEnabled && (idleEnabled == 1 || pitch.abs() < threshold) && (!idleOnlyWithMag || (magPresent || !foundTof));
-	return lastIdleEnabled;
+    static bool lastIdleEnabled = false;
+    
+    // Check if ML predict mode (mode 8)
+    if (idleEnabled == 8) {
+        // ML mode: only idle when in SPINNING state
+        extern PreFireState preFireState;
+        lastIdleEnabled = (preFireState == PREFIRE_STATE_SPINNING) && 
+                          (!idleOnlyWithMag || (magPresent || !foundTof));
+        return lastIdleEnabled;
+    }
+    
+    // Original idle logic for other modes
+    fix32 threshold = IDLE_5_DEG * idleEnabled + (lastIdleEnabled ? (IDLE_5_DEG / 3) : (-IDLE_5_DEG / 3));
+    lastIdleEnabled = idleEnabled && (idleEnabled == 1 || pitch.abs() < threshold) && (!idleOnlyWithMag || (magPresent || !foundTof));
+    return lastIdleEnabled;
 }
 #define CHECK_IDLE_EN (checkIdle())
 u8 maxFireAngleSetting = 0;
