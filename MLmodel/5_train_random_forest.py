@@ -9,7 +9,7 @@ import sys
 import numpy as np
 import joblib
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, recall_score, precision_score
 import matplotlib.pyplot as plt
 
 # Add utils to path
@@ -17,6 +17,7 @@ sys.path.insert(0, '.')
 
 from utils.metrics import (
     calculate_comprehensive_metrics,
+    calculate_false_positives_per_second,
     print_metrics,
     plot_confusion_matrix,
     plot_roc_curve,
@@ -142,13 +143,30 @@ def main():
     )
     print_metrics(val_metrics, "Random Forest (Validation)")
 
-    # Find optimal threshold
-    optimal_threshold, threshold_metrics = find_optimal_threshold(
-        y_val, y_val_prob, target_fp_per_second=1.0, sampling_rate_hz=SAMPLING_RATE_HZ
+    # Find optimal threshold using F-beta (favors recall) + consecutive filtering
+    print("\n[5] Finding optimal threshold with F-beta score + consecutive filtering...")
+    print("   Strategy: Maximize F2-score (weights recall 2x) with 20 consecutive predictions")
+    print("   Constraint: Minimum 50% recall required")
+
+    from utils.metrics import find_optimal_threshold_fbeta
+
+    optimal_threshold, threshold_metrics = find_optimal_threshold_fbeta(
+        y_val, y_val_prob,
+        min_consecutive=20,  # Simulate C++ filtering
+        sampling_rate_hz=SAMPLING_RATE_HZ,
+        beta=2.0,  # Favor recall 2x over precision
+        min_recall=0.5  # Must catch at least 50% of triggers
     )
 
-    # Test on test set with optimal threshold
-    print("\n[5] Evaluating on test set...")
+    print(f"\n   Optimal Threshold (with consecutive filtering):")
+    print(f"      Threshold:  {optimal_threshold:.3f}")
+    print(f"      F2-Score:   {threshold_metrics['fbeta']:.3f}")
+    print(f"      Recall:     {threshold_metrics['recall']:.3f}")
+    print(f"      Precision:  {threshold_metrics['precision']:.3f}")
+    print(f"      FP/s:       {threshold_metrics['fp_per_second']:.2f}")
+
+    # Test on test set
+    print("\n[6] Evaluating on test set...")
     y_test_pred = model.predict(X_test)
     y_test_prob = model.predict_proba(X_test)[:, 1]
 
@@ -156,30 +174,55 @@ def main():
     test_metrics = calculate_comprehensive_metrics(
         y_test, y_test_pred, y_test_prob, sampling_rate_hz=SAMPLING_RATE_HZ
     )
-    print_metrics(test_metrics, "Random Forest (Test, threshold=0.5)")
+    print_metrics(test_metrics, "Random Forest (Test, threshold=0.5, no filtering)")
 
-    # Optimal threshold
-    y_test_pred_opt = (y_test_prob >= optimal_threshold).astype(int)
+    # Optimal threshold WITH consecutive filtering
+    y_test_pred_raw = (y_test_prob >= optimal_threshold).astype(int)
+
+    # Apply consecutive filtering (matching validation)
+    y_test_pred_opt = np.zeros_like(y_test_pred_raw)
+    consecutive_count = 0
+    for i in range(len(y_test_pred_raw)):
+        if y_test_pred_raw[i] == 1:
+            consecutive_count += 1
+            if consecutive_count >= 20:
+                y_test_pred_opt[i] = 1
+        else:
+            consecutive_count = 0
 
     test_metrics_opt = calculate_comprehensive_metrics(
         y_test, y_test_pred_opt, y_test_prob, sampling_rate_hz=SAMPLING_RATE_HZ
     )
-    print_metrics(test_metrics_opt, f"Random Forest (Test, threshold={optimal_threshold:.3f})")
+    print_metrics(test_metrics_opt, f"Random Forest (Test, threshold={optimal_threshold:.3f}, 20 consecutive)")
 
-    # Consecutive predictions analysis (simulate C++ filtering)
-    print("\n[6] Analyzing consecutive predictions (C++ simulation)...")
-    for n_consecutive in [5, 10, 20]:
-        result = analyze_consecutive_predictions(y_test, y_test_pred_opt, min_consecutive=n_consecutive)
+    # Try different consecutive counts
+    print("\n[7] Testing different consecutive prediction requirements...")
+    for n_consecutive in [10, 15, 20, 25]:
+        y_pred_filtered = np.zeros_like(y_test_pred_raw)
+        consecutive_count = 0
+        for i in range(len(y_test_pred_raw)):
+            if y_test_pred_raw[i] == 1:
+                consecutive_count += 1
+                if consecutive_count >= n_consecutive:
+                    y_pred_filtered[i] = 1
+            else:
+                consecutive_count = 0
+
+        recall = recall_score(y_test, y_pred_filtered, zero_division=0)
+        precision = precision_score(y_test, y_pred_filtered, zero_division=0)
+        fp_per_s = calculate_false_positives_per_second(y_test, y_pred_filtered, SAMPLING_RATE_HZ)
+
+        print(f"   Consecutive={n_consecutive:2d}: Recall={recall:.3f}, Precision={precision:.3f}, FP/s={fp_per_s:.2f}")
 
     # Classification report
-    print("\n[7] Detailed classification report:")
+    print("\n[8] Detailed classification report:")
     print(classification_report(y_test, y_test_pred_opt, target_names=['No Pre-Fire', 'Pre-Fire']))
 
     # Visualizations
-    print("\n[8] Creating visualizations...")
+    print("\n[9] Creating visualizations...")
 
     plot_confusion_matrix(y_test, y_test_pred_opt,
-                         title=f'Random Forest - Confusion Matrix (threshold={optimal_threshold:.3f})',
+                         title=f'Random Forest - Confusion Matrix (threshold={optimal_threshold:.3f}, 20 consecutive)',
                          save_path=f'{OUTPUT_DIR}/confusion_matrix.png')
 
     plot_roc_curve(y_test, y_test_prob,
@@ -191,7 +234,7 @@ def main():
                                 save_path=f'{OUTPUT_DIR}/pr_curve.png')
 
     # Feature importance
-    print("\n[9] Analyzing feature importance...")
+    print("\n[10] Analyzing feature importance...")
     feature_names = joblib.load(f'{FEATURES_DIR}/feature_names.pkl')
     importances = model.feature_importances_
 
@@ -207,7 +250,7 @@ def main():
         print(f"      {i+1:2d}. {feature_names[idx]:30s}: {importances[idx]:.4f}")
 
     # Save model and results
-    print("\n[10] Saving model and results...")
+    print("\n[11] Saving model and results...")
 
     joblib.dump(model, f'{OUTPUT_DIR}/model.pkl')
     print(f"   Saved: {OUTPUT_DIR}/model.pkl")

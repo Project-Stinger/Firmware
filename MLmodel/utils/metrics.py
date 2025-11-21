@@ -256,11 +256,90 @@ def plot_precision_recall_curve(y_true: np.ndarray,
     return plt.gcf()
 
 
+def find_optimal_threshold_fbeta(y_true: np.ndarray,
+                                y_prob: np.ndarray,
+                                min_consecutive: int = 20,
+                                sampling_rate_hz: int = 1600,
+                                beta: float = 2.0,
+                                min_recall: float = 0.5) -> Tuple[float, Dict]:
+    """
+    Find optimal threshold using F-beta score with consecutive filtering.
+
+    Beta=2 weights recall 2x more than precision (we care more about catching triggers).
+    Simulates consecutive prediction filtering to get realistic FP/s.
+
+    Args:
+        y_true: True labels
+        y_prob: Predicted probabilities
+        min_consecutive: Minimum consecutive predictions required
+        sampling_rate_hz: Sampling rate
+        beta: F-beta parameter (2.0 = favor recall 2x)
+        min_recall: Minimum acceptable recall
+
+    Returns:
+        Tuple of (optimal_threshold, metrics_dict)
+    """
+    from sklearn.metrics import fbeta_score
+
+    thresholds = np.linspace(0.1, 0.7, 100)  # Focus on usable range
+    results = []
+
+    for threshold in thresholds:
+        y_pred_raw = (y_prob >= threshold).astype(int)
+
+        # Apply consecutive filtering
+        y_pred_filtered = np.zeros_like(y_pred_raw)
+        consecutive_count = 0
+        for i in range(len(y_pred_raw)):
+            if y_pred_raw[i] == 1:
+                consecutive_count += 1
+                if consecutive_count >= min_consecutive:
+                    y_pred_filtered[i] = 1
+            else:
+                consecutive_count = 0
+
+        # Calculate metrics with filtering
+        recall = recall_score(y_true, y_pred_filtered, zero_division=0)
+        precision = precision_score(y_true, y_pred_filtered, zero_division=0)
+
+        # Skip if below minimum recall
+        if recall < min_recall:
+            continue
+
+        fbeta = fbeta_score(y_true, y_pred_filtered, beta=beta, zero_division=0)
+        fp_per_s = calculate_false_positives_per_second(y_true, y_pred_filtered, sampling_rate_hz)
+
+        results.append({
+            'threshold': threshold,
+            'fbeta': fbeta,
+            'recall': recall,
+            'precision': precision,
+            'fp_per_second': fp_per_s,
+            'predictions': y_pred_filtered.sum()
+        })
+
+    if not results:
+        print(f"  WARNING: No threshold achieves min_recall={min_recall}")
+        print(f"  Falling back to F-beta optimization without recall constraint")
+        # Retry without minimum recall
+        return find_optimal_threshold_fbeta(y_true, y_prob, min_consecutive,
+                                           sampling_rate_hz, beta, min_recall=0.0)
+
+    # Find threshold with best F-beta score
+    best_idx = max(range(len(results)), key=lambda i: results[i]['fbeta'])
+    optimal = results[best_idx]
+
+    return optimal['threshold'], optimal
+
+
 def find_optimal_threshold(y_true: np.ndarray,
                           y_prob: np.ndarray,
                           target_fp_per_second: float = 1.0,
                           sampling_rate_hz: int = 1600) -> Tuple[float, Dict]:
     """
+    DEPRECATED: This function optimizes for FP/s but ignores recall.
+    Use find_optimal_threshold_fbeta() instead for better results.
+
     Find optimal prediction threshold to achieve target false positive rate.
 
     Args:
