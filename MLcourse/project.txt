@@ -1,0 +1,437 @@
+Ga naar hoofdinhoud
+Hallo Stan Coene,
+Er is geen huidige activiteit om weer te geven.
+Nieuwe activiteit wordt hier weergegeven.
+Activiteitenstream
+Filteren
+Alles weergeven
+
+Belangrijk
+24 okt. 2025 14:16
+Engineer as a Professional: Global Engineer
+Deadline verstreken: Upload your presentation here
+Einddatum: 11-11-25 23:59 (CET)
+Negeren
+24 okt. 2025 14:17
+Engineer as a Professional: Global Engineer
+Deadline verstreken: Upload your presentation here
+Einddatum: 18-11-25 23:59 (CET)
+Negeren
+7 okt. 2025 16:40
+Engineer as a Professional: Global Engineer
+Deadline verstreken: Upload initial research proposals here
+Einddatum: 28-10-25 23:59 (CET)
+Negeren
+16 sep. 2025 20:34
+IB1/EE1: Ruimtelijk inzicht en CAD - Spatial Insight and CAD
+Deadline verstreken: Bouwkundig Planlezen / Reading Architectural Plans
+Einddatum: 20-02-25 15:56 (CET)
+Negeren
+16 sep. 2025 20:34
+IB1/EE1: Ruimtelijk inzicht en CAD - Spatial Insight and CAD
+Deadline verstreken: DRAWING PASS/FAIL
+Einddatum: 02-07-25 10:00 (CEST)
+Negeren
+Gepland
+één uur 23:20
+R&D Experience
+Inleveren: Project Mid-Term Submission
+Einddatum: 21-11-25 13:30 (CET)
+9 okt. 2025 18:31
+Engineer as a Professional: Global Engineer
+Inleveren: Dropbox for Timesheet first term (due Dec 1)
+Einddatum: 01-12-25 23:59 (CET)
+14 okt. 2025 17:15
+Total Quality Management
+Inleveren: Assignment 'People Skills' 2025-2026
+Einddatum: 08-12-25 18:00 (CET)
+7 okt. 2025 17:33
+Total Quality Management
+Inleveren: Assignment 'Maintenance' 2025-2026
+Einddatum: 08-12-25 18:00 (CET)
+22 sep. 2025 11:59
+Machine Learning EM + EA
+Inleveren: Submission 3: Poster
+Einddatum: 16-12-25 23:59 (CET)
+Meer geplande activiteiten weergevenVandaag
+22 sep. 2025 11:59
+Machine Learning EM + EA
+Vervaldatum vandaag: Submission 2: Project milestone
+Einddatum: 20-11-25 23:59 (CET)
+één uur 23:20
+R&D Experience
+Toegevoegd: Project Mid-Term Submission
+7 uur 16:42
+IB1/EE1: Ruimtelijk inzicht en CAD - Spatial Insight and CAD
+Toegevoegd: er is nieuwe inhoud toegevoegd aan je cursus
+15 uur 09:27
+R&D Experience
+Toegevoegd: Lab4_Solution.zip
+Recent
+Laad nog 20 streammeldingen
+
+ULTRA-C21838363-B-2526
+Skip to main content
+Machine Learning EM + EA
+Organisation Content
+Machine learning course planning 2025-2026
+3 of 6 started
+
+Introduction Machine Learning_blank.pptx
+
+Linear regression with one variable_blank.pptx
+
+Visualisation for gradient descent
+PodCast "Black Box" from The Guardian
+2024_09_26_08_49__Machine Learning EM EA [2425]_recording 1_ba549f4f-6729-4e01-919d-a015f34b1ebf_recording.mp4
+Dutch lecture 2425
+2024_09_26_10_26__Machine Learning EM EA [2425]_recording 2_80daf3f5-b925-4bf2-85c9-33bd5c37dbba_recording.mp4
+English lecture 2425
+1 of 1 started
+
+Regression_multiple_variables_blank.pptx
+
+3 of 4 started
+
+ClassificationA_blank.pptx
+
+ClassificationB_blank.pptx
+
+Playground NN and Logistic Regression
+Backpropagation Logistic Regression
+
+1 of 1 started
+
+NN_1_blank.pptx
+
+1 of 2 started
+
+Random Initialization
+NN_2_blank_vs2.pptx
+
+2 of 2 started
+
+Advice_B_Blank.pptx
+
+Advice_A_blank.pptx
+
+5 of 14 started
+
+Assignments-Jupyterhub
+Assignment1- linear regression
+Assignment 2 - logistic regression
+Assignment 3 - neural networks for binary classification
+Assignment 4 - neural networks for multiclass classification
+2 of 5 completed
+
+Project Information
+Submission 1: Project proposal
+Due date: 16/10/2025, 23:59 (CEST)
+Please submit your project proposal here.
+Submission 2: Project milestone
+Due date: 20/11/2025, 23:59 (CET)
+Please upload your milestone document here.
+Submission 3: Poster
+Due date: 16/12/2025, 23:59 (CET)
+Submission 4: Project Final Report
+Due date: 05/01/2026, 23:59 (CET)
+Please submit your final report and the codes here.
+Organisation Staff
+Mihai Bace
+Leader
+
+Daniel Corona Oliveira Costa
+Leader
+
+Show more
+Details & Actions
+Class Collaborate
+Join session 
+
+Attendance
+View your attendance
+
+Books & Tools
+View organisation & institution tools
+
+Project (only for EA 5 ECTs)
+
+Project Information
+
+Project introduction on Sep 25, 2025
+
+Slides are available below.
+
+ML Project Intro_25-09-25.pptx
+
+
+
+Form the team
+
+Find a teammate to work on the project together.
+Register for the feedback sessions (proposal feedback and milestone) once you have a teammate: Book your feedback sessions. The due date for booking the feedback sessions is Oct 16, 2025, 23:59:59 (CET time).
+If you cannot find a teammate, please fill in this form by Oct 1, 2025, 23:59:59 (CEST time): Pair a teammate. You and your paired teammate will be contacted by email on the next day, and then you can book your feedback sessions.
+Project Proposal
+
+Once you've formed the team, discuss with your teammate carefully and propose a project.
+The project can be selected from the recommended datasets or your free choice, following the requirements. Please check the project introduction slides for more information.
+Once you've chosen the dataset, please follow the guidelines in the template below and prepare your proposal.
+The final submission should be a PDF. Only one submission per group.
+The submission channel is named 'Submission 1: Project Proposal' in Toledo / Ultra.
+Submission due: Oct 16, 2025, 23:59:59 (CEST time).
+If you have any questions or remarks, please contact meixing.liao@kuleuven.be with the email subject “ML project proposal”.
+The proposal feedback session is scheduled on Oct 23. Don't forget to book your slot.
+Template_Project Proposal.docx
+
+
+
+Project Milestone
+
+After the feedback on the proposal, you can start working on your project.
+There will be a milestone checkpoint on Nov 27. To prepare for the milestone feedback session, please follow the guidelines in the template below and prepare your milestone update.
+The final submission should be a PDF. Only one submission per group.
+The submission channel is named 'Submission 2: Project Milestone' in Toledo / Ultra.
+Submission due: Nov 20, 2025, 23:59:59 (CET time).
+If you have any questions or remarks, please contact meixing.liao@kuleuven.be with the email subject “ML project milestone”.
+The milestone feedback session follows the same slot you chose for the proposal feedback. Please find the slots via: Book your feedback sessions.
+Template_Project Milestone.docx
+
+
+
+Poster Presentation
+
+Guidelines:
+
+As part of the final evaluation, each team needs to present their results via a poster presentation on Dec 17.
+To prepare for this poster presentation session, each team has to create a poster and print it out in size A1, vertically. 
+Each team also has to submit the final poster as a PDF by Dec 16 in Ultra, under the submission channel 'Submission 3: Poster'. One submission per team. 
+During the presentation, each team will be assessed by 2 evaluators separately. The interaction with each evaluator will last 15 minutes, with Q&A included. During this session, the evaluators will also provide you with feedback to improve your work, which you can later incorporate into your final report.
+At the poster session, you'll also have an opportunity to see what everyone else did for their projects.
+If you have any questions or remarks, please contact meixing.liao@kuleuven.be with the email subject “ML project poster”.
+The group number, poster template, and past-year examples are attached below.
+Suggestions:
+
+Safer to reserve at least 2 days before the poster presentation session on Dec 17. 
+Plotter services can be found at https://icts.kuleuven.be/sc/english/education/plotter.
+For more information on how to make a scientific poster, please check https://admin.kuleuven.be/icts/english/research/dissemination/sciposter/acadposter.
+
+
+
+2025 Machine Learning Poster Session Group Number.xlsx
+
+
+ML_poster_examples.zip
+
+
+ML_poster_template_a1.pptx
+
+
+
+Final Report
+
+Guidelines:
+
+After the poster presentation, you will have several days to incorporate the suggestions and feedback into the final report.
+Please follow the guidelines in the template to prepare for your final report. The template is attached below.
+The final submission should be a zip file, including a PDF of the report and the code. Only one submission per group.
+Submission due: Jan 5, 2026, 23:59:59 (CET time).
+Work distribution among team members must be clearly stated in the report.
+If you have any questions or remarks, please contact meixing.liao@kuleuven.be with the email subject “ML project report”.
+Useful tools for academic writing:
+
+KU Leuven academic writing assistance: https://awa.schrijfhulp.be/login.php.
+Academic Phrasebank: https://www.phrasebank.manchester.ac.uk/.
+Dutch-English terminology database: https://ilt.kuleuven.be/kucl/index.php
+Template_Final Report.docx
+
+
+
+Grading
+
+60% of the project score is based on the poster presentation, 40% on the report. Specifically, the evaluation will be based on the following categories:
+
+Poster
+Poster Design & Communication: Layout; visual clarity; concise text; logical flow; language and readability; time management; and interaction.
+Technical Content & Understanding: Accuracy and clarity of problem definition, ML pipeline description, dataset explanation, preprocessing, model choice, metrics, and reasoning.
+Results, Analysis & Reflection: Correctness and interpretation of results; use of figures; critical insight; limitations and lessons learned.
+Broader Impact & Relevance: Link to real-world or scientific relevance, potential applications, clarity of motivation.
+
+
+Report
+Abstract: Summary of motivation, dataset, methods, key results, and conclusion within the required length.
+Introduction & Motivation: Problem definition; clarity of motivation; relevance to real-world or scientific context; explicit input–output formulation.
+Methods: Dataset description; clarity of source, size, feature type, class balance, preprocessing steps, and task suitability; model selection and justification; explanation of structure and parameters; tuning and validation strategy; appropriate use of metrics.
+Results: Presentation and correctness of results; clarity and completeness of figures and tables; meaningful interpretation and discussion of outcomes.
+Discussion: Interpretation of findings; comparison with literature; critical analysis of limitations; and integration of poster feedback or improvements.
+Conclusion: Concise and coherent conclusion; summary of main findings and future perspectives.
+Teamwork: clear contribution of each member.
+Writing Quality & References: language, structure, scientific rigor.
+Optional FYI: Additional Hands-on Tutorials
+
+Machine learning crash course by Google: https://developers.google.com/machine-learning/crash-course
+Kaggle: https://www.kaggle.com/learn
+×
+Download Alternative Formats
+
+Page
+Page number
+6
+of 19
+Machine Learning 2025- 2026:
+Project Introduction
+Meixing Liao
+Contact: meixing.liao@kuleuven.be
+2
+Join the group
+Please assign yourself to the group
+‘5 ECTs_EA_Thursday 9-11/11-13’
+3
+Project-Related Tasks
+Due 1 (not mandatory): Fill in the form to pair the team
+Oct 1, 2025, 23:59:59 (CEST time)
+Stage 2: Project proposal preparationDue 2: book the feedback session and submit proposal
+Oct 16, 2025, 23:59:59 (CEST time)
+Stage 1: Form the team (2 people per team)
+Proposal feedback sessionFeedback Session 1: Oct 23, 2025
+Stage 3: Preliminary implementation
+Due 3: submit the milestone progress
+Nov 20, 2025, 23:59:59 (CET time)
+Midterm feedback sessionFeedback Session 2: Nov 27, 2025
+Poster sessionPoster Evaluation & Feedback Session: Dec 17, 2025
+Stage 4: Project delivery
+Stage 5: Finalization after the feedback
+Final report submission: Jan 5, 2026, 23:59:59 (CET time)
+Poster submission: Dec 16, 2025, 23:59:59 (CET time)
+4
+5
+All the project-related information, guidelines
+and templates can be found in this folder.
+There are 4 mandatory submissions in total, you can
+find an explicit submission channel for each task.
+6
+Evaluation
+• The lab assignments and intermediate submissions / feedback sessions won’t
+be evaluated.
+• No attendance check during the lab assignment sessions.
+• The final evaluation on the project is only based on the poster presentation
+and the final report.
+• The final evaluation criteria will be announced by the milestone feedback.
+7
+Project Coach Team
+Coach 4
+Weiyi
+Coach 3
+Vayalet
+Coach 2
+Meixing
+Coach 1
+Diwas
+• Find a teammate to work on the project together.
+• Register for the feedback sessions (proposal feedback and milestone) and
+choose your coach once you have a teammate: Book your feedback sessions.
+• The same slot for both proposal and milestone feedback sessions.
+• The due date for booking the feedback sessions is Oct 16, 2025, 23:59:59
+(CEST time).
+8
+Form the team
+9
+Cannot find a teammate?
+• Fill in the form by Oct 1, 2025, 23:59:59 (CEST time):
+https://forms.cloud.microsoft/e/JUygwzUfLv (or scan
+the QR code).
+• We will randomly pair you up with another classmate
+from the same group. You and your partner will
+receive an email from us on Oct 2.
+• Then, contact your partner and choose the slot &
+coach for your project feedback by Oct 16, 2025,
+23:59:59 (CEST time):
+https://docs.google.com/spreadsheets/d/1f_UEa715sb
+Cl8RfHlcfnHV9KeLRIRJtkVn7XWpt1_HE/edit?usp=sh
+aring
+Project
+10
+Requirement:
+• 2 people per team
+• Implement ≥ 2 models, model one must be adapted from the lab assignments, no restriction other than this.
+• Focus is on modeling and analysis, not data preprocessing.
+• The dataset needs to have at least a peer reviewed publication links to it, but no need to compete with their
+results.
+• The task needs to be either classification or regression.
+How to choose the dataset?
+• Option 1: suggested datasets by the TAs
+• Option 2: freely chosen datasets with a publication linked to the dataset.
+• Choose one dataset from the pre-approved list:
+https://docs.google.com/spreadsheets/d/1tdIvliaOmU0x7EO2NVnFE4HpevPO
+R86qYaA42MmG2MI/edit?usp=sharing.
+• Research: Once the dataset is chosen, look up existing research by searching
+relevant keywords on academic search engines, such as Web of Science,
+Scopus, or IEEE Xplore.
+• Access to KU Leuven databases:
+https://bib.kuleuven.be/english/2bergen/cba/collection/databases
+11
+Option 1: suggested datasets by the TAs
+Page
+Page number
+1
+of 2
+Title: [Replace with your project title]
+Names & student numbers: [e.g. John Smith (rxxxxxxx)] & [Jane Doe(rxxxxxxx)]
+Assigned coach: [Diwas/Meixing/Vayalet/Weiyi]
+Data source: proposed/freely chosen
+Motivation
+Instructions: Briefly describe the background of the topic and why it matters in a paragraph.
+Related Work
+Instruction: Provide at least one pointer to a relevant publication, read the paper carefully,
+summarize it. Mention if there is code available. Cite the reference.
+Example: xxx et al. deployed xxx models on this dataset, achieved xxx results evaluated by xxx
+metrics.
+Dataset
+Instructions: fill in the blanks below.
+• Dataset: [name]
+• Citation / reference: [URL and/or citation]
+• Source / accessibility: [public / restricted / link]
+• Description:
+o Task: [classification / regression]
+o Number of samples:
+o Number of classes (if classification):
+o Type of features: [Numerical / textual / categorical / pixel values / time series / …]
+o Number of features:
+o Data format: [CSV / images / text / time-series …]
+o Class balance: [balanced / imbalanced, explain]
+o Data readiness: [cleaned / minor preprocessing / needs cleaning]
+o [Optional] Primary evaluation metric(s): [accuracy, F1, ROC-AUC, MSE …] (if you
+already have an idea)
+Method
+Models
+Instruction: Describe the machine learning techniques you plan to apply in bullet points.
+• Model 1 (adapted from the lab codes): xxx
+• Model 2 (freely choose the models and the use of the libraries): xxx
+• …
+Comments to the coach (optional)
+Feel free to tell us:
+• Questions for your coach.
+• Background and previous ML experience.
+o Example: It is our first time learning ML / we did xxx with xxx machine learning
+techniques before.
+• Expectations for the final outcome.
+o Example: We expect to compare 2 classical classifiers and 1 deep learning
+model.
+• Rough timeline for your project.
+o Example: We plan to deploy xxx by next milestone, then xxx by the poster
+presentation.
+• Anything else you find important.
+Reference
+Instruction: Cite your dataset and any reference you referred above.
+Reminder
+Please save your proposal file in pdf and name as:
+Proposal_[coach name]_[C/R]_[surname1]_[surname2].pdf
+Where:
+• coach name = your assigned coach number
+• C/R = task type (C = classification, R = regression)
+• surname1_surname2 = the last names of both team members
+Examples:
+• Coach Diwas, Regression, team Janssen & De Smet →
+Proposal_Diwas_R_Janssen_De Smet.pdf
+• Coach Meixing, Classification, team Li & Garcia →
+Proposal_Meixing_C_Li_Garcia.pdf
+Please delete this section in your submission!

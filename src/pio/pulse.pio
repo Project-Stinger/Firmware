@@ -1,0 +1,11 @@
+.program pulse
+.wrap_target
+set pins, 0 [29]
+nop [29]
+set pins, 1
+this:
+jmp this
+.wrap
+
+; 2 MHz clock
+.define public CLOCK 2000000

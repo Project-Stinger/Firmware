@@ -1,0 +1,387 @@
+Page
+Page number
+40
+of 40
+(function of the parameters w, b)
+𝑓𝑤,𝑏(𝑥)
+(function of x (when w and b fixed))
+𝐽(𝑤, 𝑏)
+b
+w
+(function of the parameters w, b)
+𝑓𝑤,𝑏(𝑥)
+(function of x (when w and b fixed))
+𝐽(𝑤, 𝑏)
+b
+w
+(function of the parameters w, b)
+𝑓𝑤,𝑏(𝑥)
+(function of x (when w and b fixed))
+𝐽(𝑤, 𝑏)
+b
+w
+(function of the parameters w, b)
+𝑓𝑤,𝑏(𝑥)
+(function of x (when w and b fixed))
+𝐽(𝑤, 𝑏)
+b
+w
+(function of the parameters w, b)
+𝑓𝑤,𝑏(𝑥)
+(function of x (when w and b fixed))
+𝐽(𝑤, 𝑏)
+b
+w
+“Batch” Gradient Descent
+“Batch”: Each step of gradient descent
+uses all the training examples.
+
+Page
+Page number
+1
+of 21
+Linear Regression with
+multiple variables
+Multiple features
+Andrew Ng
+edited Bart Vanrumste
+Machine Learning
+Size (feet2) Price ($1000)
+2104 460
+1416 232
+1534 315
+852 178
+… …
+Multiple features (variables)
+Size (feet2) Number of
+bedrooms
+Number of
+floors
+Age of home
+(years)
+Price ($1000)
+2104 5 1 45 460
+1416 3 2 40 232
+1534 3 2 30 315
+852 2 1 36 178
+… … … … …
+Multiple features (variables).
+Notation:
+= number of features
+= input (features) of training example.
+= value of feature in training example.
+Previously (n=1):
+𝑓𝑤,𝑏 Ԧ𝑥(𝑖) = 𝑤1𝑥1 + 𝑤2𝑥2 + 𝑤3𝑥3 + 𝑤4𝑥4 + 𝑏
+𝑓𝑤,𝑏 Ԧ𝑥(𝑖) = 𝑤. Ԧ𝑥 + 𝑏
+Multi feature (n>1):
+Linear Regression with
+multiple variables
+Vectorization
+Parameters and features
+Without vectorization
+Without vectorization
+With vectorization
+
+Page
+Page number
+1
+of 15
+Logistic
+Regression
+Classification
+Machine Learning
+Classification
+Email: Spam / Not Spam?
+Online Transactions: Fraudulent (Yes / No)?
+Tumor: Malignant / Benign ?
+0: “Negative Class” (e.g., benign tumor)
+1: “Positive Class” (e.g., malignant tumor)
+Tumor Size
+Threshold classifier output 𝑓𝑤,𝑏(𝑥) at 0.5:
+If , predict “y = 1”
+If , predict “y = 0”
+Tumor Size
+Malignant ?
+(Yes) 1
+(No) 0
+𝑓𝑤,𝑏 𝑥 ≥ 0,5
+𝑓𝑤,𝑏 𝑥 < 0,5
+Classification: y = 0 or 1
+can be > 1 or < 0
+Logistic Regression:
+𝑓𝑤,𝑏 𝑥
+0 ≤ 𝑓𝑤,𝑏 𝑥 ≤ 1
+Logistic
+Regression
+Sigmoid function
+Logistic function
+Logistic Regression Model
+Want
+1
+0.5
+0
+0 ≤ 𝑓𝑤,𝑏 𝑥 ≤ 1
+𝑓𝑤,𝑏 Ԧ𝑥 = 𝑔(𝑤. Ԧ𝑥 + 𝑏)
+
+Page
+Page number
+1
+of 26
+Logistic
+Regression
+Cost function
+Training set
+𝑓𝑤,𝑏 Ԧ𝑥 = 𝑔(𝑤. Ԧ𝑥 + 𝑏)
+How to choose parameters
+Cost function
+Linear regression:
+Logistic regression “non-convex”Linear regression: “convex”
+𝐽 𝑤, 𝑏 = 1
+𝑚 ෍
+𝑖=1
+𝑚 1
+2 (𝑓𝑤,𝑏 Ԧ𝑥 𝑖 − 𝑦 𝑖 )2
+𝑓𝑤,𝑏 Ԧ𝑥 = 𝑤. Ԧ𝑥 + 𝑏 𝑓𝑤,𝑏 Ԧ𝑥 = 1
+1 + 𝑒−(𝑤. Ԧ𝑥+𝑏)
+Logistic regression cost function
+If y = 1
+10
+𝐿 𝑓𝑤,𝑏 Ԧ𝑥 𝑖 , 𝑦 𝑖 = ቐ −l𝑛(𝑓𝑤,𝑏 Ԧ𝑥 𝑖 ) 𝑦(𝑖) = 1
+−l𝑛 (1 − 𝑓𝑤,𝑏 Ԧ𝑥 𝑖 ) 𝑦(𝑖) = 0
+Logistic regression cost function
+If y = 0
+10
+𝐿 𝑓𝑤,𝑏 Ԧ𝑥 𝑖 , 𝑦 𝑖 = ቐ −l𝑛(𝑓𝑤,𝑏 Ԧ𝑥 𝑖 ) 𝑦(𝑖) = 1
+−l𝑛 (1 − 𝑓𝑤,𝑏 Ԧ𝑥 𝑖 ) 𝑦(𝑖) = 0
+Loss is lowest when 𝑓𝑤,𝑏 Ԧ𝑥 𝑖
+predicts close to true label 𝑦(𝑖)
+Logistic
+Regression
+Simplified cost function
+and gradient descent
+Page
+Page number
+1
+of 18
+Neural Networks:
+Representation
+Non-linear
+decision
+boundaryMachine Learning
+Non-linear Classification
+x1
+x2
+Neural Networks:
+Representation
+Model
+representation I
+Neural Network Representation
+𝑥1
+𝑥2
+𝑥3
+ො𝑦
+𝑧 = 𝑤. Ԧ𝑥 + 𝑏
+𝑎
+𝑥1
+𝑥2
+𝑥3
+𝑔(𝑧) 𝑎 = ො𝑦
+𝑧
+𝑤. Ԧ𝑥 + 𝑏
+𝑎 = 𝑓𝑤,𝑏 Ԧ𝑥 = 1
+1 + 𝑒−(𝑤. Ԧ𝑥+𝑏)
+𝑎
+𝑥1
+𝑥2
+𝑥3
+𝑎 = ො𝑦
+𝑧
+Neural Network Representation
+𝑥1
+𝑥2
+𝑥3
+ො𝑦
+𝑥1
+𝑥2
+𝑥3
+ො𝑦
+𝑤. Ԧ𝑥 + 𝑏
+𝑧 = 𝑤. Ԧ𝑥 + 𝑏
+𝑎 = 𝑓𝑤,𝑏 Ԧ𝑥 = 1
+1 + 𝑒−(𝑤. Ԧ𝑥+𝑏)
+𝑔(𝑧)
+Neural Network Representation (dot-
+product notation)
+𝑥1
+𝑥2
+𝑥3
+ො𝑦
+𝑎1
+1
+𝑎2
+1
+𝑎3
+1
+𝑎4
+1
+𝑧1
+1 = 𝑤1
+1 ∙ Ԧ𝑥 + 𝑏1
+[1], 𝑎 1
+[1] = 𝜎(𝑧1
+1 )
+𝑧2
+1 = 𝑤2
+1 ∙ Ԧ𝑥 + 𝑏2
+[1], 𝑎 2
+[1] = 𝜎(𝑧2
+1 )
+𝑧3
+1 = 𝑤3
+1 ∙ Ԧ𝑥 + 𝑏3
+[1], 𝑎 3
+[1] = 𝜎(𝑧3
+1 )
+𝑧4
+1 = 𝑤4
+1 ∙ Ԧ𝑥 + 𝑏4
+[1], 𝑎 4
+[1] = 𝜎(𝑧4
+1 )
+Page
+Page number
+1
+of 27
+Neural Networks:
+Implementation
+Cost function:
+Cross Entropy
+LossMachine Learning
+Recognizing cats, dogs, and baby chicks
+X ො𝑦
+2 3 24 41 13
+2
+Andrew Ng
+Neural Network (Classification)
+Binary classification
+1 output unit
+Multi-class classification (K classes)
+K output units
+total no. of layers in network
+no. of units in layer l
+Other Cat Dog Chick
+E.g. , , ,
+Andrew Ng
+Cost Function
+Andrew Ng
+Softmax
+Neural Networks:
+Implementation
+5
+Andrew Ng
+Softmax layer
+X ො𝑦
+6
+Page
+Page number
+1
+of 24
+Advice for applying
+machine learning
+Deciding what
+to try next
+Debugging a learning algorithm:
+You have implemented regularized linear regression to predict housing prices.
+However, when you test your hypothesis on a new set of houses, you find that it
+makes unacceptably large errors in its predictions. What should you try next?
+- Get more training examples
+- Try smaller sets of features
+- Try getting additional features
+- Try adding polynomial features
+- Try decreasing
+- Try increasing
+𝐽 𝑤, 𝑏 = 1
+2𝑚 ෍
+𝑖=1
+𝑚
+(𝑓𝑤,𝑏 Ԧ𝑥 𝑖 − 𝑦 𝑖 )2 + λ
+2𝑚 ෍
+𝑗=1
+𝑛
+𝑤𝑗
+2
+Machine learning diagnostic:
+Diagnostic: A test that you can run to gain insight what
+is/isn’t working with a learning algorithm, and gain
+guidance as to how best to improve its performance.
+Diagnostics can take time to implement, but doing so
+can be a very good use of your time.
+Advice for applying
+machine learning
+Model selection and
+training/validation/test
+sets
+Evaluating your hypothesis
+Dataset:
+Size Price
+2104 400
+1600 330
+2400 369
+1416 232
+3000 540
+1985 300
+1534 315
+1427 199
+1380 212
+1494 243
+Train/validation/test error
+Training error:
+Cross Validation error:
+Test error:
+𝐽𝑡𝑟𝑎𝑖𝑛 = 1
+2𝑚 ෍
+𝑖=1
+𝑚
+(𝑓𝑤,𝑏 Ԧ𝑥 𝑖 − 𝑦 𝑖 )2
+𝐽𝐶𝑉 = 1
+2𝑚𝐶𝑉
+෍
+𝑖=1
+𝑚𝐶𝑉
+(𝑓𝑤,𝑏 Ԧ𝑥 𝑖 − 𝑦 𝑖 )2
+𝐽𝑡𝑒𝑠𝑡 = 1
+2𝑚𝑡𝑒𝑠𝑡
+෍
+𝑖=1
+𝑚𝑡𝑒𝑠𝑡
+(𝑓𝑤,𝑏 Ԧ𝑥 𝑖 − 𝑦 𝑖 )2
+𝐽 𝑤, 𝑏 = 1
+2𝑚 ෍
+𝑖=1
+𝑚
+(𝑓𝑤,𝑏 Ԧ𝑥 𝑖 − 𝑦 𝑖 )2 + λ
+2𝑚 ෍
+𝑗=1
+𝑛
+𝑤𝑗
+2
+Page
+Page number
+2
+of 42
+Machine learning
+system design
+K-fold cross-
+validation
+Model selection and hyperparameter
+tuning
+K-Fold Cross-Validation (Model
+Selection)Figure from Sebastian
+Raschka
+K-Fold Cross-Validation (Model
+Selection)
+K-Fold Cross-Validation (Model
+Selection)
+Machine learning
+system design
+Error analysis
