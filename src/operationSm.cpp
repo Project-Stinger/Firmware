@@ -10,6 +10,7 @@ u8 enabledProfiles = 5;
 bool idleOnlyWithMag = true;
 bool joystickLockout = false;
 u16 mlPreSpinTimeout = 500; // Default ML pre-spin timeout in ms
+u8 mlConsecutiveRequired = 20; // Default ML consecutive predictions required
 #if HW_VERSION == 1
 bool idleEnabled = false;
 #define CHECK_IDLE_EN (idleEnabled && (!idleOnlyWithMag || (magPresent || !foundTof)))
@@ -99,6 +100,13 @@ void setIdleState(MenuItem *_item) {
 	mainMenu->search("idleRpm")->setVisible(idleEnabled);
 	mainMenu->search("previewIdlingInMenu")->setVisible(idleEnabled);
 	DEBUG_PRINTF("idle: %d\n", idleEnabled);
+}
+
+void updateMLSettings(MenuItem *_item) {
+	// Update ML predictor with new settings
+	MLPredictor::setTimeout(mlPreSpinTimeout);
+	MLPredictor::setConsecutiveRequired(mlConsecutiveRequired);
+	DEBUG_PRINTF("ML settings updated: timeout=%d, consecutive=%d\n", mlPreSpinTimeout, mlConsecutiveRequired);
 }
 
 void __not_in_flash_func(runOperationSm)() {

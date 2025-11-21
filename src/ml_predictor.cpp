@@ -14,10 +14,14 @@
 static const int FEATURE_WINDOW_SIZE = 50;
 static const int ML_INFERENCE_INTERVAL_MS = 10;
 static const uint16_t DEFAULT_TIMEOUT_MS = 500;
+static const uint8_t DEFAULT_CONSECUTIVE_REQUIRED = 20;
 
 // State
 static bool preFireActive = false;
 static uint16_t timeout_ms = DEFAULT_TIMEOUT_MS;
+static uint8_t consecutiveRequired = DEFAULT_CONSECUTIVE_REQUIRED;
+static uint8_t consecutiveCount = 0;
+static float lastProbability = 0.0f;
 static elapsedMillis timeoutTimer = 0;
 static elapsedMillis inferenceTimer = 0;
 
@@ -281,10 +285,19 @@ bool MLPredictor::predict() {
     static Eloquent::ML::Port::EloquentML model;
     int prediction = model.predict(features);
 
-    // Update state
+    // Store probability for UI feedback (note: model.predict() returns class, not probability)
+    // For now, we'll track the raw prediction as 0.0 or 1.0
+    lastProbability = (prediction == 1) ? 1.0f : 0.0f;
+
+    // Apply consecutive filtering
     if (prediction == 1) {
-        preFireActive = true;
-        timeoutTimer = 0; // Reset timeout
+        consecutiveCount++;
+        if (consecutiveCount >= consecutiveRequired) {
+            preFireActive = true;
+            timeoutTimer = 0; // Reset timeout
+        }
+    } else {
+        consecutiveCount = 0;
     }
 
     return preFireActive;
@@ -306,6 +319,8 @@ bool MLPredictor::shouldPreSpin() {
 
 void MLPredictor::reset() {
     preFireActive = false;
+    consecutiveCount = 0;
+    lastProbability = 0.0f;
     buffer_index = 0;
     buffer_filled = false;
     timeoutTimer = 0;
@@ -334,6 +349,27 @@ void MLPredictor::setTimeout(uint16_t timeout_ms_val) {
 
 uint16_t MLPredictor::getTimeout() {
     return timeout_ms;
+}
+
+void MLPredictor::setConsecutiveRequired(uint8_t count) {
+    // Clamp to reasonable range: 5-50
+    if (count < 5) count = 5;
+    if (count > 50) count = 50;
+    consecutiveRequired = count;
+    // Reset consecutive count when changing requirement
+    consecutiveCount = 0;
+}
+
+uint8_t MLPredictor::getConsecutiveRequired() {
+    return consecutiveRequired;
+}
+
+uint8_t MLPredictor::getConsecutiveCount() {
+    return consecutiveCount;
+}
+
+float MLPredictor::getLastProbability() {
+    return lastProbability;
 }
 
 #ifdef ENABLE_ML_LOGGER
