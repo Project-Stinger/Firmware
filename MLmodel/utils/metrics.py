@@ -256,18 +256,131 @@ def plot_precision_recall_curve(y_true: np.ndarray,
     return plt.gcf()
 
 
+def identify_prefire_events(y_true: np.ndarray) -> list:
+    """
+    Identify distinct pre-fire events (runs of consecutive 1s in y_true).
+
+    Each run represents one trigger pull event's pre-fire window (100-400ms before trigger).
+
+    Args:
+        y_true: True labels
+
+    Returns:
+        List of (start_idx, end_idx) tuples for each event
+    """
+    events = []
+    in_event = False
+    start_idx = None
+
+    for i in range(len(y_true)):
+        if y_true[i] == 1 and not in_event:
+            # Start of new event
+            in_event = True
+            start_idx = i
+        elif y_true[i] == 0 and in_event:
+            # End of event
+            events.append((start_idx, i-1))
+            in_event = False
+
+    # Handle case where last event goes to end
+    if in_event:
+        events.append((start_idx, len(y_true)-1))
+
+    return events
+
+
+def calculate_event_based_metrics(y_true: np.ndarray,
+                                  y_pred_filtered: np.ndarray,
+                                  sampling_rate_hz: int = 1600) -> Dict:
+    """
+    Calculate event-based metrics (not sample-based).
+
+    Event-based recall = fraction of trigger events detected (at least one prediction in window)
+    False alarm events = number of distinct false prediction bursts (not overlapping with true events)
+
+    This is more appropriate for this application than sample-based metrics because:
+    - We only need to predict ONCE per trigger event to activate flywheels
+    - We don't need to predict 50% of samples, just catch each event
+    - False alarms should count distinct activation events, not all FP samples
+
+    Args:
+        y_true: True labels
+        y_pred_filtered: Filtered predictions (after consecutive requirement)
+        sampling_rate_hz: Sampling rate
+
+    Returns:
+        Dictionary with event-based metrics
+    """
+    # Find all true pre-fire events
+    true_events = identify_prefire_events(y_true)
+
+    # Count detected events (events with at least one prediction)
+    detected_events = 0
+    for start, end in true_events:
+        if y_pred_filtered[start:end+1].sum() > 0:
+            detected_events += 1
+
+    event_recall = detected_events / len(true_events) if true_events else 0
+
+    # Find all prediction events (bursts of consecutive 1s in predictions)
+    pred_events = []
+    in_pred = False
+    pred_start = None
+
+    for i in range(len(y_pred_filtered)):
+        if y_pred_filtered[i] == 1 and not in_pred:
+            in_pred = True
+            pred_start = i
+        elif y_pred_filtered[i] == 0 and in_pred:
+            pred_events.append((pred_start, i-1))
+            in_pred = False
+
+    if in_pred:
+        pred_events.append((pred_start, len(y_pred_filtered)-1))
+
+    # Count false alarm events (prediction bursts with no overlap with true events)
+    false_alarm_events = 0
+    for pred_start, pred_end in pred_events:
+        # Check if this prediction event overlaps with any true event
+        overlaps = False
+        for true_start, true_end in true_events:
+            if not (pred_end < true_start or pred_start > true_end):
+                overlaps = True
+                break
+
+        if not overlaps:
+            false_alarm_events += 1
+
+    # Calculate false alarm events per second
+    total_time_s = len(y_true) / sampling_rate_hz
+    false_alarms_per_second = false_alarm_events / total_time_s if total_time_s > 0 else 0
+
+    return {
+        'event_recall': event_recall,
+        'detected_events': detected_events,
+        'total_events': len(true_events),
+        'false_alarm_events': false_alarm_events,
+        'false_alarms_per_second': false_alarms_per_second,
+        'total_prediction_events': len(pred_events)
+    }
+
+
 def find_optimal_threshold_fbeta(y_true: np.ndarray,
                                 y_prob: np.ndarray,
                                 min_consecutive: int = 20,
                                 sampling_rate_hz: int = 1600,
                                 beta: float = 2.0,
-                                min_recall: float = 0.5,
-                                max_fp_per_second: float = 20.0) -> Tuple[float, Dict]:
+                                min_event_recall: float = 0.8,
+                                max_false_alarms_per_second: float = 5.0) -> Tuple[float, Dict]:
     """
     Find optimal threshold using F-beta score with consecutive filtering.
 
+    IMPORTANT: Uses EVENT-BASED metrics, not sample-based!
+    - Event recall = fraction of trigger events detected (not fraction of samples)
+    - False alarms/s = distinct false activation events per second (not FP samples)
+
     Beta=2 weights recall 2x more than precision (we care more about catching triggers).
-    Simulates consecutive prediction filtering to get realistic FP/s.
+    Simulates consecutive prediction filtering to get realistic metrics.
 
     Args:
         y_true: True labels
@@ -275,8 +388,8 @@ def find_optimal_threshold_fbeta(y_true: np.ndarray,
         min_consecutive: Minimum consecutive predictions required
         sampling_rate_hz: Sampling rate
         beta: F-beta parameter (2.0 = favor recall 2x)
-        min_recall: Minimum acceptable recall
-        max_fp_per_second: Maximum acceptable FP/s (with consecutive filtering)
+        min_event_recall: Minimum acceptable event-based recall (0.8 = catch 80% of events)
+        max_false_alarms_per_second: Maximum acceptable false alarm events per second
 
     Returns:
         Tuple of (optimal_threshold, metrics_dict)
@@ -300,15 +413,17 @@ def find_optimal_threshold_fbeta(y_true: np.ndarray,
             else:
                 consecutive_count = 0
 
-        # Calculate metrics with filtering
+        # Calculate EVENT-BASED metrics
+        event_metrics = calculate_event_based_metrics(y_true, y_pred_filtered, sampling_rate_hz)
+
+        # Also calculate sample-based metrics for compatibility
         recall = recall_score(y_true, y_pred_filtered, zero_division=0)
         precision = precision_score(y_true, y_pred_filtered, zero_division=0)
-        fp_per_s = calculate_false_positives_per_second(y_true, y_pred_filtered, sampling_rate_hz)
 
-        # Skip if below minimum recall OR above maximum FP/s
-        if recall < min_recall:
+        # Skip if below minimum event recall OR above maximum false alarms/s
+        if event_metrics['event_recall'] < min_event_recall:
             continue
-        if fp_per_s > max_fp_per_second:
+        if event_metrics['false_alarms_per_second'] > max_false_alarms_per_second:
             continue
 
         fbeta = fbeta_score(y_true, y_pred_filtered, beta=beta, zero_division=0)
@@ -316,18 +431,23 @@ def find_optimal_threshold_fbeta(y_true: np.ndarray,
         results.append({
             'threshold': threshold,
             'fbeta': fbeta,
-            'recall': recall,
+            'recall': recall,  # sample-based (for compatibility)
             'precision': precision,
-            'fp_per_second': fp_per_s,
+            'event_recall': event_metrics['event_recall'],
+            'detected_events': event_metrics['detected_events'],
+            'total_events': event_metrics['total_events'],
+            'false_alarms_per_second': event_metrics['false_alarms_per_second'],
+            'false_alarm_events': event_metrics['false_alarm_events'],
+            'fp_per_second': calculate_false_positives_per_second(y_true, y_pred_filtered, sampling_rate_hz),
             'predictions': y_pred_filtered.sum()
         })
 
     if not results:
-        print(f"  WARNING: No threshold achieves min_recall={min_recall} AND max_fp_per_second={max_fp_per_second}")
-        print(f"  Relaxing FP/s constraint to 50...")
-        # Retry with relaxed FP/s constraint
+        print(f"  WARNING: No threshold achieves min_event_recall={min_event_recall} AND max_false_alarms_per_second={max_false_alarms_per_second}")
+        print(f"  Relaxing constraints: min_event_recall=0.5, max_false_alarms_per_second=10.0")
+        # Retry with relaxed constraints
         return find_optimal_threshold_fbeta(y_true, y_prob, min_consecutive,
-                                           sampling_rate_hz, beta, min_recall, max_fp_per_second=50.0)
+                                           sampling_rate_hz, beta, min_event_recall=0.5, max_false_alarms_per_second=10.0)
 
     # Find threshold with best F-beta score
     best_idx = max(range(len(results)), key=lambda i: results[i]['fbeta'])

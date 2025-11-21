@@ -144,9 +144,10 @@ def main():
     print_metrics(val_metrics, "Random Forest (Validation)")
 
     # Find optimal threshold using F-beta (favors recall) + consecutive filtering
-    print("\n[5] Finding optimal threshold with F-beta score + consecutive filtering...")
+    print("\n[5] Finding optimal threshold with EVENT-BASED optimization...")
     print("   Strategy: Maximize F2-score (weights recall 2x) with 20 consecutive predictions")
-    print("   Constraint: Minimum 50% recall required")
+    print("   Constraint: Catch 80% of trigger EVENTS (not samples!)")
+    print("   Constraint: Maximum 5 false alarm EVENTS per second (not FP samples!)")
 
     from utils.metrics import find_optimal_threshold_fbeta
 
@@ -155,16 +156,18 @@ def main():
         min_consecutive=20,  # Simulate C++ filtering
         sampling_rate_hz=SAMPLING_RATE_HZ,
         beta=2.0,  # Favor recall 2x over precision
-        min_recall=0.5,  # Must catch at least 50% of triggers
-        max_fp_per_second=20.0  # Maximum 20 FP/s (with consecutive filtering)
+        min_event_recall=0.8,  # Must catch at least 80% of trigger EVENTS
+        max_false_alarms_per_second=5.0  # Maximum 5 false alarm EVENTS per second
     )
 
     print(f"\n   Optimal Threshold (with consecutive filtering):")
-    print(f"      Threshold:  {optimal_threshold:.3f}")
-    print(f"      F2-Score:   {threshold_metrics['fbeta']:.3f}")
-    print(f"      Recall:     {threshold_metrics['recall']:.3f}")
-    print(f"      Precision:  {threshold_metrics['precision']:.3f}")
-    print(f"      FP/s:       {threshold_metrics['fp_per_second']:.2f}")
+    print(f"      Threshold:         {optimal_threshold:.3f}")
+    print(f"      F2-Score:          {threshold_metrics['fbeta']:.3f}")
+    print(f"      Event Recall:      {threshold_metrics['event_recall']:.3f} ({threshold_metrics['detected_events']}/{threshold_metrics['total_events']} events)")
+    print(f"      Sample Recall:     {threshold_metrics['recall']:.3f}")
+    print(f"      Precision:         {threshold_metrics['precision']:.3f}")
+    print(f"      False Alarms/s:    {threshold_metrics['false_alarms_per_second']:.2f} events/s ({threshold_metrics['false_alarm_events']} events)")
+    print(f"      FP Samples/s:      {threshold_metrics['fp_per_second']:.2f}")
 
     # Test on test set
     print("\n[6] Evaluating on test set...")
@@ -195,6 +198,13 @@ def main():
         y_test, y_test_pred_opt, y_test_prob, sampling_rate_hz=SAMPLING_RATE_HZ
     )
     print_metrics(test_metrics_opt, f"Random Forest (Test, threshold={optimal_threshold:.3f}, 20 consecutive)")
+
+    # Add event-based metrics display
+    from utils.metrics import calculate_event_based_metrics
+    test_event_metrics = calculate_event_based_metrics(y_test, y_test_pred_opt, SAMPLING_RATE_HZ)
+    print(f"\n   EVENT-BASED METRICS:")
+    print(f"      Events Detected:   {test_event_metrics['detected_events']}/{test_event_metrics['total_events']} ({test_event_metrics['event_recall']:.1%})")
+    print(f"      False Alarms:      {test_event_metrics['false_alarm_events']} events ({test_event_metrics['false_alarms_per_second']:.2f} events/s)")
 
     # Try different consecutive counts
     print("\n[7] Testing different consecutive prediction requirements...")
