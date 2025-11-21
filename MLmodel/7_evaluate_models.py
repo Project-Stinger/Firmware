@@ -55,46 +55,49 @@ def create_deployment_comparison(models_results):
     rows = []
 
     # Logistic Regression
-    lr_results = models_results['Logistic Regression']
-    lr_model = lr_results['model']
-    lr_params = sum(1 for coef in lr_model.coef_[0]) + 1  # weights + bias
-    lr_size_kb = lr_params * 4 / 1024  # float32
+    if 'Logistic Regression' in models_results:
+        lr_results = models_results['Logistic Regression']
+        lr_model = lr_results['model']
+        lr_params = sum(1 for coef in lr_model.coef_[0]) + 1  # weights + bias
+        lr_size_kb = lr_params * 4 / 1024  # float32
 
-    rows.append({
-        'Model': 'Logistic Regression',
-        'Parameters': f'{lr_params:,}',
-        'Size (KB)': f'{lr_size_kb:.2f}',
-        'RP2040 Deployable': 'Yes',
-        'Inference Speed': 'Very Fast',
-        'Complexity': 'Low'
-    })
+        rows.append({
+            'Model': 'Logistic Regression',
+            'Parameters': f'{lr_params:,}',
+            'Size (KB)': f'{lr_size_kb:.2f}',
+            'RP2040 Deployable': 'Yes',
+            'Inference Speed': 'Very Fast',
+            'Complexity': 'Low'
+        })
 
     # Random Forest
-    rf_results = models_results['Random Forest']
-    rf_size = rf_results['size_info']
+    if 'Random Forest' in models_results:
+        rf_results = models_results['Random Forest']
+        rf_size = rf_results['size_info']
 
-    rows.append({
-        'Model': 'Random Forest',
-        'Parameters': f'{rf_size["total_nodes"]:,} nodes',
-        'Size (KB)': f'{rf_size["estimated_size_kb"]:.2f}',
-        'RP2040 Deployable': 'Yes' if rf_size['estimated_size_kb'] < 200 else 'Maybe',
-        'Inference Speed': 'Fast',
-        'Complexity': 'Medium'
-    })
+        rows.append({
+            'Model': 'Random Forest',
+            'Parameters': f'{rf_size["total_nodes"]:,} nodes',
+            'Size (KB)': f'{rf_size["estimated_size_kb"]:.2f}',
+            'RP2040 Deployable': 'Yes' if rf_size['estimated_size_kb'] < 200 else 'Maybe',
+            'Inference Speed': 'Fast',
+            'Complexity': 'Medium'
+        })
 
     # Neural Network
-    nn_results = models_results['Neural Network']
-    nn_params = nn_results['total_parameters']
-    nn_size_kb = nn_params * 4 / 1024
+    if 'Neural Network' in models_results:
+        nn_results = models_results['Neural Network']
+        nn_params = nn_results['total_parameters']
+        nn_size_kb = nn_params * 4 / 1024
 
-    rows.append({
-        'Model': 'Neural Network',
-        'Parameters': f'{nn_params:,}',
-        'Size (KB)': f'{nn_size_kb:.2f}',
-        'RP2040 Deployable': 'No',
-        'Inference Speed': 'Slow',
-        'Complexity': 'High'
-    })
+        rows.append({
+            'Model': 'Neural Network',
+            'Parameters': f'{nn_params:,}',
+            'Size (KB)': f'{nn_size_kb:.2f}',
+            'RP2040 Deployable': 'No',
+            'Inference Speed': 'Slow',
+            'Complexity': 'High'
+        })
 
     return pd.DataFrame(rows)
 
