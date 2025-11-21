@@ -1,0 +1,22 @@
+# Core ML libraries
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Model export and optimization
+joblib>=1.3.0
+onnx>=1.14.0
+onnxruntime>=1.15.0
+
+# Data analysis
+scipy>=1.10.0
+tqdm>=4.65.0
+
+# Model compression
+scikit-optimize>=0.9.0
