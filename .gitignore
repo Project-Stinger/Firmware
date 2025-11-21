@@ -5,3 +5,5 @@
 .vscode/ipch
 include/git_version.h
 .last_git_hash
+
+venv

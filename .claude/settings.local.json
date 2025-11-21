@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(timeout 10 tail:*)",
+      "Bash(pio run:*)",
+      "Bash(source venv/bin/activate)",
+      "Bash(pip install:*)",
+      "Bash(python prepare_data.py:*)",
+      "Bash(python train_models.py:*)",
+      "Bash(python train_rf_optimized.py:*)",
+      "Bash(~/.platformio/penv/bin/platformio run:*)",
+      "Bash(echo:*)",
+      "Bash(src/model.h)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

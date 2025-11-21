@@ -1,86 +1,54 @@
 import pandas as pd
 import numpy as np
-import os
 
-def prepare_data():
-    """
-    Loads the raw IMU data, creates labels for pre-fire events,
-    engineers features using a sliding window, and saves the result.
-    """
-    print("--- ML-Stinger: Part 1 - Data Preparation (100ms Pre-Fire Window) ---")
-    
-    # --- 1. Load Data ---
-    print("\n[Step 1/4] Loading and cleaning raw data...")
-    input_file = 'nerf_imu_data.csv'
-    
-    if not os.path.exists(input_file):
-        print(f"--- ERROR ---")
-        print(f"Input file '{input_file}' not found. Please make sure you have captured the data and it's in the correct folder.")
-        return
+# Load the raw data
+df = pd.read_csv('nerf_imu_data.csv')
 
-    try:
-        column_names = ['accel_x', 'accel_y', 'accel_z', 'gyro_x', 'gyro_y', 'gyro_z', 'trigger_state']
-        df = pd.read_csv(input_file, header=0, names=column_names, on_bad_lines='skip', low_memory=False)
+# --- Feature Engineering ---
+# Create a rolling window
+window_size = 50
+imu_columns = ['accel_x', 'accel_y', 'accel_z', 'gyro_x', 'gyro_y', 'gyro_z']
+rolling_window = df[imu_columns].rolling(window=window_size)
 
-        for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df.dropna(inplace=True)
-        
-        print(f"Successfully loaded {len(df)} lines of data.")
+# Calculate rolling statistics
+rolling_mean = rolling_window.mean().add_suffix('_mean')
+rolling_std = rolling_window.std().add_suffix('_std')
+rolling_min = rolling_window.min().add_suffix('_min')
+rolling_max = rolling_window.max().add_suffix('_max')
+# Calculate rate of change (derivative)
+rolling_deriv = df[imu_columns].diff().rolling(window=window_size).mean().add_suffix('_deriv')
 
-    except Exception as e:
-        print(f"An error occurred while loading the data: {e}")
-        return
+# Combine the features into a new DataFrame
+features_df = pd.concat([rolling_mean, rolling_std, rolling_min, rolling_max, rolling_deriv], axis=1)
+df = pd.concat([df, features_df], axis=1)
 
-    # --- 2. Labeling ---
-    print("\n[Step 2/4] Labeling pre-fire signals...")
-    # *** THIS IS THE VALUE YOU ASKED TO CHANGE ***
-    PREDICTION_WINDOW_MS = 500
-    SENSOR_HZ = 1000 # This should match the firmware's loop rate
-    window_samples = int(SENSOR_HZ * (PREDICTION_WINDOW_MS / 1000.0))
-    print(f"Using a pre-fire prediction window of {PREDICTION_WINDOW_MS} ms ({window_samples} samples).")
+# Drop rows with NaN values created by the rolling window and diff
+df.dropna(inplace=True)
+df.reset_index(drop=True, inplace=True)
 
-    df['pre_fire_signal'] = 0
-    trigger_pull_indices = df.index[(df['trigger_state'] == 1) & (df['trigger_state'].shift(1) == 0)]
-    print(f"Found {len(trigger_pull_indices)} trigger pull events.")
+# --- Labeling (Full Window Strategy) ---
+df['pre_fire'] = 0
 
-    for idx in trigger_pull_indices:
-        start_index = max(0, idx - window_samples)
-        df.loc[start_index:idx, 'pre_fire_signal'] = 1
+# Find where the trigger is pulled (0 to 1 transition)
+trigger_pull_indices = df.index[ (df['trigger_state'].shift(1) == 0) & (df['trigger_state'] == 1) ].tolist()
 
-    print(f"Labeled {df['pre_fire_signal'].sum()} total samples as 'pre_fire_signal'.")
+# Define the pre-fire window in samples (1200Hz sample rate)
+pre_fire_window_start = 360  # 300ms
+pre_fire_window_end = 120    # 100ms
 
-    # --- 3. Feature Engineering ---
-    print("\n[Step 3/4] Engineering features with a sliding window...")
-    FEATURE_WINDOW_MS = 100
-    feature_window_samples = int(SENSOR_HZ * (FEATURE_WINDOW_MS / 1000.0))
-    print(f"Using a feature window of {FEATURE_WINDOW_MS} ms ({feature_window_samples} samples).")
+# Label the entire pre-fire window
+for idx in trigger_pull_indices:
+    start_label_idx = max(0, idx - pre_fire_window_start)
+    end_label_idx = idx - pre_fire_window_end
+    if start_label_idx < end_label_idx:
+        df.loc[start_label_idx:end_label_idx, 'pre_fire'] = 1
 
-    sensor_cols = ['accel_x', 'accel_y', 'accel_z', 'gyro_x', 'gyro_y', 'gyro_z']
-    rolling_features = df[sensor_cols].rolling(window=feature_window_samples)
-    df_features = pd.DataFrame()
+# --- Save Processed Data ---
+feature_cols = [col for col in df.columns if any(suffix in col for suffix in ['_mean', '_std', '_min', '_max', '_deriv'])]
+output_columns = ['pre_fire'] + feature_cols
+processed_df = df[output_columns]
 
-    print("Calculating rolling mean, std, min, and max for each sensor axis...")
-    for col in sensor_cols:
-        df_features[f'{col}_mean'] = rolling_features[col].mean()
-        df_features[f'{col}_std'] = rolling_features[col].std()
-        df_features[f'{col}_min'] = rolling_features[col].min()
-        df_features[f'{col}_max'] = rolling_features[col].max()
+processed_df.to_csv('processed_nerf_imu_data.csv', index=False)
 
-    df_features['pre_fire_signal'] = df['pre_fire_signal']
-    df_features.dropna(inplace=True)
-    print(f"Created features DataFrame with shape: {df_features.shape}")
-
-    # --- 4. Save Data ---
-    print("\n[Step 4/4] Saving processed data...")
-    output_file = 'processed_features.csv'
-    df_features.to_csv(output_file, index=False)
-    
-    print("-" * 50)
-    print(f"Success! Processed data saved to '{output_file}'.")
-    print("\nThis file is now ready for training your model.")
-    print("-" * 50)
-
-if __name__ == '__main__':
-    prepare_data()
-
+print("Data preparation complete.")
+print(f"Total samples: {len(processed_df)}")

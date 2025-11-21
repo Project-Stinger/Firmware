@@ -59,6 +59,8 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <PIO_DShot.h>
+#include "ml_predictor.h"
+
 
 #define PID_RATE 3200
 

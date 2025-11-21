@@ -30,5 +30,6 @@
 		"new": "cpp",
 		"regex": "cpp",
 		"cstdint": "cpp"
-	}
+	},
+	"git.ignoreLimitWarning": true
 }

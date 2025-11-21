@@ -1,4 +1,7 @@
 #include "global.h"
+#if HW_VERSION == 2
+#include "ml_predictor.h"
+#endif
 
 volatile u32 operationState = STATE_SETUP;
 volatile u32 forceNewOpState = 0xFFFFFFFFUL;
@@ -6,6 +9,7 @@ u8 selectedProfile = 0;
 u8 enabledProfiles = 5;
 bool idleOnlyWithMag = true;
 bool joystickLockout = false;
+u16 mlPreSpinTimeout = 500; // Default ML pre-spin timeout in ms
 #if HW_VERSION == 1
 bool idleEnabled = false;
 #define CHECK_IDLE_EN (idleEnabled && (!idleOnlyWithMag || (magPresent || !foundTof)))
@@ -18,9 +22,8 @@ bool checkIdle() {
     
     // Check if ML predict mode (mode 8)
     if (idleEnabled == 8) {
-        // ML mode: only idle when in SPINNING state
-        extern PreFireState preFireState;
-        lastIdleEnabled = (preFireState == PREFIRE_STATE_SPINNING) && 
+        // ML mode: only idle when predictor says to pre-spin
+        lastIdleEnabled = MLPredictor::shouldPreSpin() &&
                           (!idleOnlyWithMag || (magPresent || !foundTof));
         return lastIdleEnabled;
     }
