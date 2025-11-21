@@ -155,7 +155,8 @@ def main():
         min_consecutive=20,  # Simulate C++ filtering
         sampling_rate_hz=SAMPLING_RATE_HZ,
         beta=2.0,  # Favor recall 2x over precision
-        min_recall=0.5  # Must catch at least 50% of triggers
+        min_recall=0.5,  # Must catch at least 50% of triggers
+        max_fp_per_second=20.0  # Maximum 20 FP/s (with consecutive filtering)
     )
 
     print(f"\n   Optimal Threshold (with consecutive filtering):")

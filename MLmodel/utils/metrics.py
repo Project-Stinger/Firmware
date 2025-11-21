@@ -261,7 +261,8 @@ def find_optimal_threshold_fbeta(y_true: np.ndarray,
                                 min_consecutive: int = 20,
                                 sampling_rate_hz: int = 1600,
                                 beta: float = 2.0,
-                                min_recall: float = 0.5) -> Tuple[float, Dict]:
+                                min_recall: float = 0.5,
+                                max_fp_per_second: float = 20.0) -> Tuple[float, Dict]:
     """
     Find optimal threshold using F-beta score with consecutive filtering.
 
@@ -275,6 +276,7 @@ def find_optimal_threshold_fbeta(y_true: np.ndarray,
         sampling_rate_hz: Sampling rate
         beta: F-beta parameter (2.0 = favor recall 2x)
         min_recall: Minimum acceptable recall
+        max_fp_per_second: Maximum acceptable FP/s (with consecutive filtering)
 
     Returns:
         Tuple of (optimal_threshold, metrics_dict)
@@ -301,13 +303,15 @@ def find_optimal_threshold_fbeta(y_true: np.ndarray,
         # Calculate metrics with filtering
         recall = recall_score(y_true, y_pred_filtered, zero_division=0)
         precision = precision_score(y_true, y_pred_filtered, zero_division=0)
+        fp_per_s = calculate_false_positives_per_second(y_true, y_pred_filtered, sampling_rate_hz)
 
-        # Skip if below minimum recall
+        # Skip if below minimum recall OR above maximum FP/s
         if recall < min_recall:
+            continue
+        if fp_per_s > max_fp_per_second:
             continue
 
         fbeta = fbeta_score(y_true, y_pred_filtered, beta=beta, zero_division=0)
-        fp_per_s = calculate_false_positives_per_second(y_true, y_pred_filtered, sampling_rate_hz)
 
         results.append({
             'threshold': threshold,
@@ -319,11 +323,11 @@ def find_optimal_threshold_fbeta(y_true: np.ndarray,
         })
 
     if not results:
-        print(f"  WARNING: No threshold achieves min_recall={min_recall}")
-        print(f"  Falling back to F-beta optimization without recall constraint")
-        # Retry without minimum recall
+        print(f"  WARNING: No threshold achieves min_recall={min_recall} AND max_fp_per_second={max_fp_per_second}")
+        print(f"  Relaxing FP/s constraint to 50...")
+        # Retry with relaxed FP/s constraint
         return find_optimal_threshold_fbeta(y_true, y_prob, min_consecutive,
-                                           sampling_rate_hz, beta, min_recall=0.0)
+                                           sampling_rate_hz, beta, min_recall, max_fp_per_second=50.0)
 
     # Find threshold with best F-beta score
     best_idx = max(range(len(results)), key=lambda i: results[i]['fbeta'])
