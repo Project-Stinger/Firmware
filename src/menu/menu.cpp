@@ -203,6 +203,7 @@ void initMenu() {
 #elif HW_VERSION == 2
         ->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 8, (const char *)idleStrings, 12, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
         ->addChild(new MenuItem(VariableType::U16, &mlPreSpinTimeout, DEFAULT_PRESPIN_TIMEOUT_MS, 50, 100, 2000, 1, 0, EEPROM_POS_ML_TIMEOUT, false, "mlTimeout", "ML Idle Timeout", "Time in ms the motors will idle after ML prediction before spinning down"))
+        ->addChild(new MenuItem(VariableType::U8, &mlConsecutiveRequired, DEFAULT_ML_CONSECUTIVE, 1, 5, 50, 1, 0, EEPROM_POS_ML_CONSECUTIVE, false, "mlConsec", "ML Sensitivity", "Consecutive predictions required (5=High, 20=Med, 50=Low)"))
 #endif
 #ifdef USE_TOF
 		->addChild(new MenuItem(&idleOnlyWithMag, true, EEPROM_POS_IDLE_ONLY_WITH_MAG, false, "idleOnlyWithMag", HW_VERSION == 2 ? "Idle only with mag" : "No mag no idle", "Preview the idling RPM in the menu"))
@@ -426,6 +427,10 @@ void initMenu() {
 	mainMenu->search("rpm")->setOnChangeFunction(calcTargetRpms);
 	mainMenu->search("frRatio")->setOnChangeFunction(calcTargetRpms);
 	mainMenu->search("idleEn")->setOnChangeFunction(setIdleState);
+#if HW_VERSION == 2
+	mainMenu->search("mlTimeout")->setOnChangeFunction(updateMLSettings);
+	mainMenu->search("mlConsec")->setOnChangeFunction(updateMLSettings);
+#endif
 	mainMenu->setOnLeftFunction(jumpToSaveOption);
 	mainMenu->search("fireMode")->setOnChangeFunction(onFireModeChange);
 	mainMenu->search("resetAction")->setOnEnterFunction(clearEeprom);

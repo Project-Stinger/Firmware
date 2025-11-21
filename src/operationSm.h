@@ -42,8 +42,10 @@ enum PreFireState {
 
 extern PreFireState preFireState;
 extern u16 mlPreSpinTimeout;
+extern u8 mlConsecutiveRequired;
 
 #define DEFAULT_PRESPIN_TIMEOUT_MS 500
+#define DEFAULT_ML_CONSECUTIVE 20
 #endif
 extern bool bootUnlockNeeded;
 extern u16 rampdownTime, rampupTimeout;
@@ -98,3 +100,4 @@ enum OperationState {
 void runOperationSm();
 
 void setIdleState(MenuItem *_item);
+void updateMLSettings(MenuItem *_item);

@@ -400,6 +400,53 @@ void drawProfileSpecs(const char *p00, const char *p01, const char *p10, const c
 #endif
 }
 
+#if HW_VERSION == 2
+// Draw ML prediction confidence bar on home screen
+void drawMLConfidenceBar() {
+	// Only show if ML prediction mode is enabled (idleEnabled == 8)
+	if (idleEnabled != 8) {
+		return;
+	}
+
+	uint8_t current = MLPredictor::getConsecutiveCount();
+	uint8_t required = MLPredictor::getConsecutiveRequired();
+
+	// Only draw if there are active predictions
+	if (current == 0) {
+		// Clear the bar area if it was previously drawn
+		static bool wasPreviouslyDrawn = false;
+		if (wasPreviouslyDrawn) {
+			tft.fillRect(10, 127, 220, 7, HOME_BACKGROUND_COLOR);
+			wasPreviouslyDrawn = false;
+		}
+		return;
+	}
+
+	// Calculate progress (0-100%)
+	uint8_t progress = (current * 100) / required;
+
+	// Bar dimensions
+	const int BAR_X = 10;
+	const int BAR_Y = 127;  // Near bottom of screen (135 height total)
+	const int BAR_WIDTH = 220;
+	const int BAR_HEIGHT = 7;
+
+	// Draw background/border
+	tft.drawRect(BAR_X, BAR_Y, BAR_WIDTH, BAR_HEIGHT, ST77XX_WHITE);
+
+	// Fill based on progress
+	int fill_width = (progress * (BAR_WIDTH - 2)) / 100;
+	if (fill_width > 0) {
+		tft.fillRect(BAR_X + 1, BAR_Y + 1, fill_width, BAR_HEIGHT - 2, ST77XX_GREEN);
+	}
+
+	// Clear the unfilled portion
+	if (fill_width < BAR_WIDTH - 2) {
+		tft.fillRect(BAR_X + 1 + fill_width, BAR_Y + 1, BAR_WIDTH - 2 - fill_width, BAR_HEIGHT - 2, HOME_BACKGROUND_COLOR);
+	}
+}
+#endif
+
 void displayLoop() {
 	volatile u32 state = operationState; // cache the operationState because the other core might change it
 	if (forceNewOpState != 0xFFFFFFFFUL) return; // avoid redundant display updates
@@ -835,6 +882,13 @@ void displayLoop() {
 			updateTimer = 0;
 			speakerLoopOnFastCore = true;
 			printJoystickGuideDot();
+		}
+
+		// Draw ML confidence bar (updates at ~20 Hz)
+		static elapsedMillis mlBarUpdateTimer = 50;
+		if (mlBarUpdateTimer >= 50) {
+			mlBarUpdateTimer = 0;
+			drawMLConfidenceBar();
 		}
 #endif
 	} break;

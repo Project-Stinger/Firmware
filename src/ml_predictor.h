@@ -39,6 +39,12 @@ public:
     // Configuration
     static void setTimeout(uint16_t timeout_ms);
     static uint16_t getTimeout();
+    static void setConsecutiveRequired(uint8_t count);
+    static uint8_t getConsecutiveRequired();
+
+    // UI Feedback - for confidence bar display
+    static uint8_t getConsecutiveCount();  // Current consecutive predictions
+    static float getLastProbability();     // Last raw prediction probability (0.0-1.0)
 
 #ifdef ENABLE_ML_LOGGER
     // Data logging for training
