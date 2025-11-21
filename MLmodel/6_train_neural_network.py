@@ -21,11 +21,12 @@ sys.path.insert(0, '.')
 
 from utils.metrics import (
     calculate_comprehensive_metrics,
+    calculate_false_positives_per_second,
     print_metrics,
     plot_confusion_matrix,
     plot_roc_curve,
     plot_precision_recall_curve,
-    find_optimal_threshold
+    find_optimal_threshold_fbeta
 )
 
 # Configuration
@@ -315,10 +316,29 @@ def main():
     )
     print_metrics(val_metrics, "Neural Network (Validation)")
 
-    # Find optimal threshold
-    optimal_threshold, threshold_metrics = find_optimal_threshold(
-        y_val, y_val_prob, target_fp_per_second=1.0, sampling_rate_hz=SAMPLING_RATE_HZ
+    # Find optimal threshold using F-beta score + consecutive filtering
+    print("\n[7.5] Finding optimal threshold with EVENT-BASED optimization...")
+    print("   Strategy: Maximize F2-score (weights recall 2x) with 20 consecutive predictions")
+    print("   Constraint: Catch 80% of trigger EVENTS (not samples!)")
+    print("   Constraint: Maximum 5 false alarm EVENTS per second (not FP samples!)")
+
+    optimal_threshold, threshold_metrics = find_optimal_threshold_fbeta(
+        y_val, y_val_prob,
+        min_consecutive=20,  # Simulate C++ filtering
+        sampling_rate_hz=SAMPLING_RATE_HZ,
+        beta=2.0,  # Favor recall 2x over precision
+        min_event_recall=0.8,  # Must catch at least 80% of trigger EVENTS
+        max_false_alarms_per_second=5.0  # Maximum 5 false alarm EVENTS per second
     )
+
+    print(f"\n   Optimal Threshold (with consecutive filtering):")
+    print(f"      Threshold:         {optimal_threshold:.3f}")
+    print(f"      F2-Score:          {threshold_metrics['fbeta']:.3f}")
+    print(f"      Event Recall:      {threshold_metrics['event_recall']:.3f} ({threshold_metrics['detected_events']}/{threshold_metrics['total_events']} events)")
+    print(f"      Sample Recall:     {threshold_metrics['recall']:.3f}")
+    print(f"      Precision:         {threshold_metrics['precision']:.3f}")
+    print(f"      False Alarms/s:    {threshold_metrics['false_alarms_per_second']:.2f} events/s ({threshold_metrics['false_alarm_events']} events)")
+    print(f"      FP Samples/s:      {threshold_metrics['fp_per_second']:.2f}")
 
     # Evaluate on test set
     print("\n[8] Evaluating on test set...")
@@ -329,22 +349,60 @@ def main():
     test_metrics = calculate_comprehensive_metrics(
         y_test, y_test_pred, y_test_prob, sampling_rate_hz=SAMPLING_RATE_HZ
     )
-    print_metrics(test_metrics, "Neural Network (Test, threshold=0.5)")
+    print_metrics(test_metrics, "Neural Network (Test, threshold=0.5, no filtering)")
 
-    # Optimal threshold
-    y_test_pred_opt = (y_test_prob >= optimal_threshold).astype(int)
+    # Optimal threshold WITH consecutive filtering
+    y_test_pred_raw = (y_test_prob >= optimal_threshold).astype(int)
+
+    # Apply consecutive filtering (matching validation)
+    y_test_pred_opt = np.zeros_like(y_test_pred_raw)
+    consecutive_count = 0
+    for i in range(len(y_test_pred_raw)):
+        if y_test_pred_raw[i] == 1:
+            consecutive_count += 1
+            if consecutive_count >= 20:
+                y_test_pred_opt[i] = 1
+        else:
+            consecutive_count = 0
 
     test_metrics_opt = calculate_comprehensive_metrics(
         y_test, y_test_pred_opt, y_test_prob, sampling_rate_hz=SAMPLING_RATE_HZ
     )
-    print_metrics(test_metrics_opt, f"Neural Network (Test, threshold={optimal_threshold:.3f})")
+    print_metrics(test_metrics_opt, f"Neural Network (Test, threshold={optimal_threshold:.3f}, 20 consecutive)")
+
+    # Add event-based metrics display
+    from utils.metrics import calculate_event_based_metrics
+    test_event_metrics = calculate_event_based_metrics(y_test, y_test_pred_opt, SAMPLING_RATE_HZ)
+    print(f"\n   EVENT-BASED METRICS:")
+    print(f"      Events Detected:   {test_event_metrics['detected_events']}/{test_event_metrics['total_events']} ({test_event_metrics['event_recall']:.1%})")
+    print(f"      False Alarms:      {test_event_metrics['false_alarm_events']} events ({test_event_metrics['false_alarms_per_second']:.2f} events/s)")
+
+    # Try different consecutive counts
+    print("\n[9] Testing different consecutive prediction requirements...")
+    from sklearn.metrics import recall_score, precision_score
+    for n_consecutive in [10, 15, 20, 25]:
+        y_pred_filtered = np.zeros_like(y_test_pred_raw)
+        consecutive_count = 0
+        for i in range(len(y_test_pred_raw)):
+            if y_test_pred_raw[i] == 1:
+                consecutive_count += 1
+                if consecutive_count >= n_consecutive:
+                    y_pred_filtered[i] = 1
+            else:
+                consecutive_count = 0
+
+        recall = recall_score(y_test, y_pred_filtered, zero_division=0)
+        precision = precision_score(y_test, y_pred_filtered, zero_division=0)
+        fp_per_s = calculate_false_positives_per_second(y_test, y_pred_filtered, SAMPLING_RATE_HZ)
+
+        print(f"   Consecutive={n_consecutive:2d}: Recall={recall:.3f}, Precision={precision:.3f}, FP/s={fp_per_s:.2f}")
 
     # Classification report
-    print("\n[9] Detailed classification report:")
+    print("\n[10] Detailed classification report:")
     print(classification_report(y_test, y_test_pred_opt, target_names=['No Pre-Fire', 'Pre-Fire']))
 
     # Visualizations
-    print("\n[10] Creating visualizations...")
+    print("\n[11] Creating visualizations...")
 
     plot_confusion_matrix(y_test, y_test_pred_opt,
                          title=f'Neural Network - Confusion Matrix (threshold={optimal_threshold:.3f})',
@@ -359,7 +417,7 @@ def main():
                                 save_path=f'{OUTPUT_DIR}/pr_curve.png')
 
     # Save model and results
-    print("\n[11] Saving model and results...")
+    print("\n[12] Saving model and results...")
 
     torch.save({
         'model_state_dict': model.state_dict(),
@@ -392,7 +450,7 @@ def main():
     print(f"   Saved: {OUTPUT_DIR}/results.pkl")
 
     # Export to ONNX (for potential optimization)
-    print("\n[12] Exporting to ONNX format...")
+    print("\n[13] Exporting to ONNX format...")
     try:
         dummy_input = torch.randn(1, input_size).to(device)
         torch.onnx.export(
