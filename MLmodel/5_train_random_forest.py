@@ -32,14 +32,14 @@ FEATURES_DIR = 'outputs/features'
 OUTPUT_DIR = 'outputs/models/random_forest'
 SAMPLING_RATE_HZ = 1600
 
-# Random Forest hyperparameters optimized for MCU deployment
-# Goal: Keep model small enough for RP2040 (264KB RAM)
+# Random Forest hyperparameters - LARGER MODEL for better accuracy
+# We have 2MB flash, currently using ~15%, so we can afford a bigger model
 RF_CONFIG = {
-    'n_estimators': 10,        # Small number of trees (can tune: try 5, 10, 15, 20)
-    'max_depth': 8,            # Limit tree depth (can tune: try 5, 8, 10)
-    'min_samples_split': 20,   # Prevent overfitting
-    'min_samples_leaf': 10,    # Prevent overfitting
-    'max_features': 'sqrt',    # Reduce tree complexity
+    'n_estimators': 50,        # More trees for better accuracy
+    'max_depth': 12,           # Deeper trees for more complex patterns
+    'min_samples_split': 10,   # Allow finer splits
+    'min_samples_leaf': 5,     # Smaller leaves for more detail
+    'max_features': 'sqrt',    # Keep for diversity
     'class_weight': 'balanced', # Handle class imbalance
     'random_state': 42,
     'n_jobs': -1

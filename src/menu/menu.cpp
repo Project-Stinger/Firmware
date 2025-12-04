@@ -16,6 +16,173 @@ bool extendedRpmRange = false;
 u8 rotationTickSensitivity = 0;
 const char rotationSensitivityStrings[3][10] = {"Slow", "Medium", "Fast"};
 
+bool expertMode = false;
+
+#if HW_VERSION == 2
+// Power as percentage (20-100%, maps to 10600-53000 RPM)
+u8 powerPercent = 57;  // Default ~30k RPM
+
+void syncPowerToRpm(MenuItem *_item) {
+	// 20% = 10600 RPM, 100% = 53000 RPM
+	targetRpm = 10600 + (powerPercent - 20) * (53000 - 10600) / 80;
+	Serial.printf("DEBUG syncPowerToRpm: powerPercent=%d -> targetRpm=%ld\n", powerPercent, targetRpm);
+	calcTargetRpms(nullptr);
+}
+
+void syncRpmToPower() {
+	// Reverse conversion
+	Serial.printf("DEBUG syncRpmToPower: targetRpm=%ld -> ", targetRpm);
+	if (targetRpm <= 10600) powerPercent = 20;
+	else if (targetRpm >= 53000) powerPercent = 100;
+	else powerPercent = 20 + (targetRpm - 10600) * 80 / (53000 - 10600);
+	Serial.printf("powerPercent=%d\n", powerPercent);
+}
+#endif
+
+#if HW_VERSION == 2
+// Convert simple idle mode + angle to full idleEnabled value
+void syncSimpleIdleToFull(MenuItem *_item) {
+	switch (simpleIdleMode) {
+		case 0: idleEnabled = 0; break;  // Off
+		case 1: idleEnabled = 1; break;  // Always
+		case 2: idleEnabled = idleAngleSetting + 2; break;  // Angle: 2-7 based on setting
+		case 3: idleEnabled = 8; break;  // ML Predict
+		case 4: idleEnabled = 9; break;  // ML Smooth
+	}
+	// Update visibility of angle setting and ML sensitivity
+	mainMenu->search("idleAngle")->setVisible(simpleIdleMode == 2 && !expertMode);
+	mainMenu->search("mlSens")->setVisible((simpleIdleMode == 3 || simpleIdleMode == 4) && !expertMode);
+	mainMenu->search("idleRpm")->setVisible(idleEnabled > 0);
+}
+
+// Convert full idleEnabled to simple mode (for initial load)
+void syncFullIdleToSimple() {
+	if (idleEnabled == 0) {
+		simpleIdleMode = 0;  // Off
+	} else if (idleEnabled == 1) {
+		simpleIdleMode = 1;  // Always
+	} else if (idleEnabled >= 2 && idleEnabled <= 7) {
+		simpleIdleMode = 2;  // Angle
+		idleAngleSetting = idleEnabled - 2;
+	} else if (idleEnabled == 8) {
+		simpleIdleMode = 3;  // ML Predict
+	} else {  // 9
+		simpleIdleMode = 4;  // ML Smooth
+	}
+}
+
+// Convert ML sensitivity (0=Low, 1=Med, 2=High) to consecutive count
+void syncMlSensitivity(MenuItem *_item) {
+	switch (mlSensitivity) {
+		case 0: mlConsecutiveRequired = 40; break;  // Low sensitivity = more consecutive needed
+		case 1: mlConsecutiveRequired = 20; break;  // Medium
+		case 2: mlConsecutiveRequired = 10; break;  // High sensitivity = fewer consecutive needed
+	}
+	MLPredictor::setConsecutiveRequired(mlConsecutiveRequired);
+}
+
+// Convert consecutive count to sensitivity (for initial load)
+void syncConsecutiveToSensitivity() {
+	if (mlConsecutiveRequired >= 35) mlSensitivity = 0;       // Low
+	else if (mlConsecutiveRequired >= 15) mlSensitivity = 1;  // Medium
+	else mlSensitivity = 2;                                    // High
+}
+
+// Convert simple rampdown (0=Short, 1=Medium, 2=Long) to rampdownTime
+void syncRampdownToTime(MenuItem *_item) {
+	switch (rampdownSetting) {
+		case 0: rampdownTime = 300; break;   // Short
+		case 1: rampdownTime = 600; break;   // Medium
+		case 2: rampdownTime = 1000; break;  // Long
+	}
+}
+
+// Convert rampdownTime to simple setting (for initial load)
+void syncTimeToRampdown() {
+	if (rampdownTime <= 400) rampdownSetting = 0;        // Short
+	else if (rampdownTime <= 800) rampdownSetting = 1;   // Medium
+	else rampdownSetting = 2;                             // Long
+}
+
+// Sync all simple mode values from expert settings (public, called from display.cpp)
+void syncSimpleModeValues() {
+	Serial.println("DEBUG syncSimpleModeValues called");
+	syncRpmToPower();
+	syncFullIdleToSimple();
+	syncConsecutiveToSensitivity();
+	syncTimeToRampdown();
+	// Trigger redraw on all simple mode menu items so they show updated values
+	mainMenu->search("power")->triggerRedrawValue();
+	mainMenu->search("simpleIdle")->triggerRedrawValue();
+	mainMenu->search("idleAngle")->triggerRedrawValue();
+	mainMenu->search("mlSens")->triggerRedrawValue();
+	mainMenu->search("simpleRampdown")->triggerRedrawValue();
+	updateExpertVisibility(nullptr);
+	onFireModeChange(nullptr);
+}
+
+// Wrapper for MenuItem onEnter callback
+bool syncSimpleModeOnEnter(MenuItem *_item) {
+	syncSimpleModeValues();
+	return true;
+}
+#endif
+
+void updateExpertVisibility(MenuItem *_item) {
+#if HW_VERSION == 2
+	// Simple vs Expert mode toggle for Motors/Firing menus
+	mainMenu->search("motor")->setVisible(expertMode);
+	mainMenu->search("firing")->setVisible(expertMode);
+	mainMenu->search("performance")->setVisible(!expertMode);
+
+	// Simple mode idle controls
+	mainMenu->search("simpleIdle")->setVisible(!expertMode);
+	mainMenu->search("idleAngle")->setVisible(!expertMode && simpleIdleMode == 2);
+	mainMenu->search("mlSens")->setVisible(!expertMode && (simpleIdleMode == 3 || simpleIdleMode == 4));
+
+	// Expert mode idle controls
+	mainMenu->search("idleEn")->setVisible(expertMode);
+	mainMenu->search("mlTimeout")->setVisible(expertMode && (idleEnabled == 8 || idleEnabled == 9));
+	mainMenu->search("mlConsec")->setVisible(expertMode && (idleEnabled == 8 || idleEnabled == 9));
+#endif
+
+	// Motors - Expert settings
+	mainMenu->search("motorGoToExpert")->setVisible(expertMode);
+	mainMenu->search("previewIdlingInMenu")->setVisible(expertMode && idleEnabled);
+	mainMenu->search("frRatio")->setVisible(expertMode);
+
+	// Firing - Expert settings
+	mainMenu->search("firingExpert")->setVisible(expertMode);
+	mainMenu->search("burstKeepFiring")->setVisible(expertMode);
+
+	// Battery - Expert settings
+	mainMenu->search("batVoltOffset")->setVisible(expertMode);
+	mainMenu->search("storageMode")->setVisible(expertMode);
+#if HW_VERSION == 2
+	mainMenu->search("fastStandby")->setVisible(expertMode);
+#endif
+
+	// Interface - Expert settings
+	mainMenu->search("settingsBeep")->setVisible(expertMode);
+	mainMenu->search("rotationTickSensitivity")->setVisible(expertMode);
+#if defined(USE_TOF) && HW_VERSION == 2
+	mainMenu->search("beepOnMagChange")->setVisible(expertMode);
+#endif
+
+	// Profile - Expert settings
+	mainMenu->search("copyProfileMenu")->setVisible(expertMode);
+	mainMenu->search("swapProfileMenu")->setVisible(expertMode);
+	mainMenu->search("enabledProfiles")->setVisible(expertMode);
+
+	// Device - some settings stay visible
+	mainMenu->search("bootScreen")->setVisible(expertMode);
+	mainMenu->search("safetyMenu")->setVisible(expertMode);
+	// Hardware menu stays visible for ESC config etc.
+
+	// Tournament mode - Expert only
+	mainMenu->search("tournament")->setVisible(expertMode);
+}
+
 #if HW_VERSION == 1
 #define DEFAULT_PID_P 50
 #define DEFAULT_PID_I 30
@@ -40,6 +207,14 @@ void loadSettings() {
 #endif
 	mainMenu->init();
 	applyTournamentLimits();
+#if HW_VERSION == 2
+	syncRpmToPower();               // Convert RPM to power percentage
+	syncFullIdleToSimple();         // Convert idleEnabled to simple mode values
+	syncConsecutiveToSensitivity(); // Convert consecutive count to sensitivity
+	syncTimeToRampdown();           // Convert rampdownTime to simple setting
+#endif
+	updateExpertVisibility(nullptr);  // Apply expert mode visibility
+	onFireModeChange(nullptr);        // Apply fire mode dependent visibility
 #if HW_VERSION == 2
 	speakerLoopOnFastCore = false;
 #endif
@@ -201,7 +376,7 @@ void initMenu() {
 #if HW_VERSION == 1
 		->addChild(new MenuItem(&idleEnabled, false, EEPROM_POS_IDLE_ENABLED, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
 #elif HW_VERSION == 2
-        ->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 8, (const char *)idleStrings, 12, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+        ->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 9, (const char *)idleStrings, 12, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
         ->addChild(new MenuItem(VariableType::U16, &mlPreSpinTimeout, DEFAULT_PRESPIN_TIMEOUT_MS, 50, 100, 2000, 1, 0, EEPROM_POS_ML_TIMEOUT, false, "mlTimeout", "ML Idle Timeout", "Time in ms the motors will idle after ML prediction before spinning down"))
         ->addChild(new MenuItem(VariableType::U8, &mlConsecutiveRequired, DEFAULT_ML_CONSECUTIVE, 1, 5, 50, 1, 0, EEPROM_POS_ML_CONSECUTIVE, false, "mlConsec", "ML Sensitivity", "Consecutive predictions required (5=High, 20=Med, 50=Low)"))
 #endif
@@ -266,6 +441,35 @@ void initMenu() {
 #endif
 		->addChild(new MenuItem(VariableType::U8, &minPushDuration, 15, 1, 10, 200, 1, 0, EEPROM_POS_PUSH_DURATION, false, "pushDuration", "Push ms", "Duration in ms the pusher is active for each dart"))
 		->addChild(new MenuItem(VariableType::U8, &minRetractDuration, HW_VERSION == 2 ? 18 : 40, 1, 10, 200, 1, 0, EEPROM_POS_RETRACT_DURATION, false, "retractDuration", "Min. Retract ms", "Minimum duration in ms the pusher is inactive after each dart"));
+
+#if HW_VERSION == 2
+	// ======================== Performance Menu (Simple Mode) ========================
+	MenuItem *performanceMenu = new MenuItem(MenuItemType::SUBMENU, "performance", "Performance");
+	performanceMenu
+		// Power as percentage (20-100%), step 1%
+		->addChild(new MenuItem(VariableType::U8, &powerPercent, 57, 1, 20, 100, 1, 0, EEPROM_RUNTIME_OPTION, true, "power", "Power", "Dart speed (20%=Low, 100%=Max)"))
+		// Fire mode
+		->addChild(new MenuItem(&fireMode, FIRE_CONTINUOUS, EEPROM_POS_FIRE_MODE, 2, (const char *)fireModeNames, FIRE_MODE_STRING_LENGTH, true, "simpleFireMode", "Fire Mode", "Single, Burst, or Full Auto"))
+		// Burst count (shown when burst mode)
+		->addChild(new MenuItem(VariableType::U8, &burstCount, 3, 1, 2, 6, 1, 0, EEPROM_POS_BURST_COUNT, true, "simpleBurstCount", "Burst Count", "Darts per burst"))
+		// Darts per second
+		->addChild(new MenuItem(VariableType::U8, &dpsLimit, 40, 1, 2, 40, 1, 0, EEPROM_POS_DPS_LIMIT, true, "simpleDps", "Fire Rate", "Maximum darts per second"))
+		// Simple idle mode selector (5 options: Off, Always, Angle, ML, ML Smooth)
+		->addChild(new MenuItem(&simpleIdleMode, 0, EEPROM_RUNTIME_OPTION, 4, (const char *)simpleIdleStrings, 10, true, "simpleIdle", "Pre-Rev", "Motor warm-up mode"))
+		// Idle angle (when Angle mode selected)
+		->addChild(new MenuItem(&idleAngleSetting, 3, EEPROM_RUNTIME_OPTION, 5, (const char *)idleAngleStrings, 5, true, "idleAngle", "Angle", "Tilt angle for pre-rev"))
+		// ML Sensitivity (when ML mode selected)
+		->addChild(new MenuItem(&mlSensitivity, 1, EEPROM_RUNTIME_OPTION, 2, (const char *)mlSensitivityStrings, 8, true, "mlSens", "ML Sensitivity", "How quickly ML triggers pre-rev"))
+		// Idle RPM
+		->addChild(new MenuItem(VariableType::I32, &idleRpm, 5000, 500, 1000, 20000, 1, 0, EEPROM_POS_IDLE_RPM, true, "simpleIdleRpm", "Pre-Rev Speed", "Motor speed during warm-up"))
+		// Rampdown time
+		->addChild(new MenuItem(&rampdownSetting, 1, EEPROM_RUNTIME_OPTION, 2, (const char *)rampdownStrings, 8, true, "simpleRampdown", "Rev-Down", "How quickly motors spin down"))
+#ifdef USE_TOF
+		// Mag capacity
+		->addChild(new MenuItem(VariableType::U8, &magSize, 15, 1, 7, 30, 1, 0, EEPROM_POS_MAG_SIZE, false, "simpleMagSize", "Mag Capacity", "Darts per magazine"))
+#endif
+		;
+#endif
 
 	// ======================== Battery Menu ========================
 	MenuItem *batteryMenu = new MenuItem(MenuItemType::SUBMENU, "battery", HW_VERSION == 2 ? "Battery & Standby" : "Battery");
@@ -411,13 +615,17 @@ void initMenu() {
 
 	// ======================== Main Menu ========================
 	mainMenu
-		->addChild(motorMenu)
-		->addChild(firingMenu)
+#if HW_VERSION == 2
+		->addChild(performanceMenu)  // Simple mode: merged Motors+Firing
+#endif
+		->addChild(motorMenu)        // Expert mode: separate Motors
+		->addChild(firingMenu)       // Expert mode: separate Firing
 		->addChild(batteryMenu)
 		->addChild(interfaceMenu)
 		->addChild(profileMenu)
 		->addChild(deviceMenu)
 		->addChild(tournamentMenu)
+		->addChild(new MenuItem(&expertMode, false, EEPROM_POS_EXPERT_MODE, false, "expertMode", "Expert Mode", "Show advanced settings for power users"))
 		->addChild(new MenuItem(MenuItemType::ACTION, "save", "Save", "Save settings"))
 		->addChild(new MenuItem(MenuItemType::ACTION, "discard", "Discard", "Discard changes"));
 
@@ -427,9 +635,18 @@ void initMenu() {
 	mainMenu->search("rpm")->setOnChangeFunction(calcTargetRpms);
 	mainMenu->search("frRatio")->setOnChangeFunction(calcTargetRpms);
 	mainMenu->search("idleEn")->setOnChangeFunction(setIdleState);
+	mainMenu->search("expertMode")->setOnChangeFunction(updateExpertVisibility);
 #if HW_VERSION == 2
 	mainMenu->search("mlTimeout")->setOnChangeFunction(updateMLSettings);
 	mainMenu->search("mlConsec")->setOnChangeFunction(updateMLSettings);
+	// Simple mode handlers
+	mainMenu->search("power")->setOnChangeFunction(syncPowerToRpm);
+	mainMenu->search("simpleIdle")->setOnChangeFunction(syncSimpleIdleToFull);
+	mainMenu->search("idleAngle")->setOnChangeFunction(syncSimpleIdleToFull);
+	mainMenu->search("mlSens")->setOnChangeFunction(syncMlSensitivity);
+	mainMenu->search("simpleRampdown")->setOnChangeFunction(syncRampdownToTime);
+	mainMenu->search("simpleFireMode")->setOnChangeFunction(onFireModeChange);
+	mainMenu->setOnEnterFunction(syncSimpleModeOnEnter);
 #endif
 	mainMenu->setOnLeftFunction(jumpToSaveOption);
 	mainMenu->search("fireMode")->setOnChangeFunction(onFireModeChange);

@@ -16,7 +16,7 @@ class FeatureExtractor:
 
     Features (42 total):
     - Basic statistics (24): mean, std, min, max for each of 6 axes
-    - Derivative features (12): mean and std of velocity for each of 6 axes
+    - Derivative features (12): mean and std of diff for each of 6 axes
     - Magnitude features (6): mean, std, max for accel and gyro magnitudes
     """
 
