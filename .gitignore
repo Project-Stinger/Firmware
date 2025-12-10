@@ -11,9 +11,13 @@
 *.uf2
 *.bin.signed
 
-# Course-specific files (ML poster project)
+# Course-specific files
 posters/
 MLmodel/POSTER_CONTENT.md
+MLcourse/
+
+# Claude Code
+.claude/
 
 # ML model outputs (generated data, too large for git)
 MLmodel/outputs/
