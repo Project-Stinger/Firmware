@@ -10,7 +10,8 @@ extern bool idleOnlyWithMag;
 extern bool idleEnabled;
 #elif HW_VERSION == 2
 extern u8 idleEnabled;
-const char idleStrings[9][12] = {
+// Full idle mode strings (for expert mode)
+const char idleStrings[10][12] = {
     "Off",
     "Always",
     "+/- 10°",
@@ -20,7 +21,20 @@ const char idleStrings[9][12] = {
     "+/- 30°",
     "+/- 35°",
     "ML Predict",
+    "ML Smooth",
 };
+// Simple idle mode: 0=Off, 1=Always, 2=Angle, 3=ML, 4=ML Smooth
+extern u8 simpleIdleMode;
+const char simpleIdleStrings[5][10] = {"Off", "Always", "Angle", "ML", "ML Smooth"};
+// Idle angle setting (10-35 degrees)
+extern u8 idleAngleSetting;
+const char idleAngleStrings[6][5] = {"10", "15", "20", "25", "30", "35"};
+// ML sensitivity: 0=Low, 1=Medium, 2=High
+extern u8 mlSensitivity;
+const char mlSensitivityStrings[3][8] = {"Low", "Medium", "High"};
+// Simple ramp-down: 0=Short(300ms), 1=Medium(600ms), 2=Long(1000ms)
+extern u8 rampdownSetting;
+const char rampdownStrings[3][8] = {"Short", "Medium", "Long"};
 extern u8 maxFireAngleSetting;
 const char fireAngleStrings[6][9] = {
 	"40°",
@@ -42,8 +56,10 @@ enum PreFireState {
 
 extern PreFireState preFireState;
 extern u16 mlPreSpinTimeout;
+extern u8 mlConsecutiveRequired;
 
 #define DEFAULT_PRESPIN_TIMEOUT_MS 500
+#define DEFAULT_ML_CONSECUTIVE 20
 #endif
 extern bool bootUnlockNeeded;
 extern u16 rampdownTime, rampupTimeout;
@@ -98,3 +114,6 @@ enum OperationState {
 void runOperationSm();
 
 void setIdleState(MenuItem *_item);
+#if HW_VERSION == 2
+void updateMLSettings(MenuItem *_item);
+#endif

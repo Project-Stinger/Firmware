@@ -176,6 +176,9 @@ void eepromMigrate(u8 major, u8 minor, u8 patch) {
 		// Add default ML timeout setting
 		u16 mlTimeout = DEFAULT_PRESPIN_TIMEOUT_MS;
 		EEPROM.put(EEPROM_POS_ML_TIMEOUT, mlTimeout);
+		// Add default ML consecutive count setting
+		u8 mlConsec = DEFAULT_ML_CONSECUTIVE;
+		EEPROM.put(EEPROM_POS_ML_CONSECUTIVE, mlConsec);
 #endif
 
 		major = 2;
@@ -280,6 +283,22 @@ void eepromInit() {
 #if HW_VERSION == 2
 	// Load ML timeout setting
 	EEPROM.get(EEPROM_POS_ML_TIMEOUT, mlPreSpinTimeout);
+	// Load ML consecutive required setting
+	EEPROM.get(EEPROM_POS_ML_CONSECUTIVE, mlConsecutiveRequired);
+
+	// Validate ML settings (protect against uninitialized EEPROM reading 0xFF)
+	if (mlPreSpinTimeout == 0xFFFF || mlPreSpinTimeout > 2000) {
+		mlPreSpinTimeout = DEFAULT_PRESPIN_TIMEOUT_MS;
+		EEPROM.put(EEPROM_POS_ML_TIMEOUT, mlPreSpinTimeout);
+	}
+	if (mlConsecutiveRequired == 0xFF || mlConsecutiveRequired < 5 || mlConsecutiveRequired > 50) {
+		mlConsecutiveRequired = DEFAULT_ML_CONSECUTIVE;
+		EEPROM.put(EEPROM_POS_ML_CONSECUTIVE, mlConsecutiveRequired);
+	}
+
+	// Apply ML settings to predictor
+	MLPredictor::setTimeout(mlPreSpinTimeout);
+	MLPredictor::setConsecutiveRequired(mlConsecutiveRequired);
 #endif
 	
 	initMenu();

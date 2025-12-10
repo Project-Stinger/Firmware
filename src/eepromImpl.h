@@ -100,7 +100,9 @@ enum EepromPos {
 #endif
 	EEPROM_POS_IDLE_ONLY_WITH_MAG = 2188,
 	EEPROM_POS_ESC_TEMP_OFFSETS = 2189,
-	EEPROM_POS_ML_TIMEOUT = 2193, // Add ML timeout position
+	EEPROM_POS_ML_TIMEOUT = 2193, // ML timeout (uint16_t, 2 bytes)
+	EEPROM_POS_ML_CONSECUTIVE = 2195, // ML consecutive required count (uint8_t, 1 byte)
+	EEPROM_POS_EXPERT_MODE = 2196, // Expert mode toggle (bool, 1 byte)
 
 	// Runtime options, not stored in EEPROM
 	EEPROM_RUNTIME_OPTION = 0x7FFF,

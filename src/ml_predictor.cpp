@@ -12,12 +12,16 @@
 
 // Configuration
 static const int FEATURE_WINDOW_SIZE = 50;
-static const int ML_INFERENCE_INTERVAL_MS = 10;
+static const int ML_INFERENCE_INTERVAL_MS = 6;  // ~167Hz inference (matches training stride of 10 samples at 1600Hz)
 static const uint16_t DEFAULT_TIMEOUT_MS = 500;
+static const uint8_t DEFAULT_CONSECUTIVE_REQUIRED = 20;  // 120ms latency (20 * 6ms)
 
 // State
 static bool preFireActive = false;
 static uint16_t timeout_ms = DEFAULT_TIMEOUT_MS;
+static uint8_t consecutiveRequired = DEFAULT_CONSECUTIVE_REQUIRED;
+static uint8_t consecutiveCount = 0;
+static float lastProbability = 0.0f;
 static elapsedMillis timeoutTimer = 0;
 static elapsedMillis inferenceTimer = 0;
 
@@ -111,6 +115,7 @@ inline void update_stats(RunningStats *stats, float *buffer, float new_val, floa
 void MLPredictor::init() {
     // Reset all state
     reset();
+    Serial.println("ML: Predictor initialized");
 }
 
 void MLPredictor::updateIMU(int16_t accel_x, int16_t accel_y, int16_t accel_z,
@@ -149,7 +154,10 @@ void MLPredictor::updateIMU(int16_t accel_x, int16_t accel_y, int16_t accel_z,
 
     // Advance buffer index
     buffer_index = (buffer_index + 1) % FEATURE_WINDOW_SIZE;
-    if (buffer_index == 0) buffer_filled = true;
+    if (buffer_index == 0 && !buffer_filled) {
+        buffer_filled = true;
+        Serial.println("ML: Buffer filled, predictions starting");
+    }
 }
 
 void MLPredictor::extractFeatures(float* features) {
@@ -191,13 +199,16 @@ void MLPredictor::extractFeatures(float* features) {
     extract_stats(&gyro_z_stats);
 
     // Derivative features (12 total: 6 axes × 2 stats)
-    // Simplified: use recent velocity (last 10 samples)
+    // Use last 10 samples to compute 9 differences (matching Python np.diff)
     auto calc_derivative_stats = [&](float *buffer) {
         float diff_sum = 0.0f;
         float diff_sumSq = 0.0f;
-        int count = 10;
+        static const int derivative_window = 10;
+        static const int n_diffs = derivative_window - 1;  // 9 differences from 10 samples
 
-        for (int i = 1; i < count && i < FEATURE_WINDOW_SIZE; i++) {
+        // Loop from i=0 to i<9 to match Python: np.diff(data[-10:])
+        // i=0 gives diff between most recent (buffer_index-1) and 2nd most recent (buffer_index-2)
+        for (int i = 0; i < n_diffs; i++) {
             int idx_curr = (buffer_index - 1 - i + FEATURE_WINDOW_SIZE) % FEATURE_WINDOW_SIZE;
             int idx_prev = (buffer_index - 2 - i + FEATURE_WINDOW_SIZE) % FEATURE_WINDOW_SIZE;
             float diff = buffer[idx_curr] - buffer[idx_prev];
@@ -205,8 +216,8 @@ void MLPredictor::extractFeatures(float* features) {
             diff_sumSq += diff * diff;
         }
 
-        float diff_mean = diff_sum / count;
-        float diff_variance = (diff_sumSq / count) - (diff_mean * diff_mean);
+        float diff_mean = diff_sum / n_diffs;
+        float diff_variance = (diff_sumSq / n_diffs) - (diff_mean * diff_mean);
         float diff_std = (diff_variance > 0.0f) ? fast_sqrt(diff_variance) : 0.0f;
 
         features[idx++] = diff_mean;
@@ -273,18 +284,31 @@ bool MLPredictor::predict() {
     }
     inferenceTimer = 0;
 
+    // Check if buffer is filled
+    if (!buffer_filled) {
+        return false;
+    }
+
     // Extract features
     float features[42];
     extractFeatures(features);
 
-    // Run model
-    static Eloquent::ML::Port::EloquentML model;
-    int prediction = model.predict(features);
+    // Run model using the auto-generated Random Forest functions
+    float prob = predict_prefire_probability(features);
+    int prediction = (prob >= RF_THRESHOLD) ? 1 : 0;
 
-    // Update state
+    // Store probability for UI feedback
+    lastProbability = prob;
+
+    // Apply consecutive filtering
     if (prediction == 1) {
-        preFireActive = true;
-        timeoutTimer = 0; // Reset timeout
+        consecutiveCount++;
+        if (consecutiveCount >= consecutiveRequired) {
+            preFireActive = true;
+            timeoutTimer = 0; // Reset timeout
+        }
+    } else {
+        consecutiveCount = 0;
     }
 
     return preFireActive;
@@ -306,6 +330,8 @@ bool MLPredictor::shouldPreSpin() {
 
 void MLPredictor::reset() {
     preFireActive = false;
+    consecutiveCount = 0;
+    lastProbability = 0.0f;
     buffer_index = 0;
     buffer_filled = false;
     timeoutTimer = 0;
@@ -334,6 +360,27 @@ void MLPredictor::setTimeout(uint16_t timeout_ms_val) {
 
 uint16_t MLPredictor::getTimeout() {
     return timeout_ms;
+}
+
+void MLPredictor::setConsecutiveRequired(uint8_t count) {
+    // Clamp to reasonable range: 5-50 (at 10ms inference = 50-500ms latency)
+    if (count < 5) count = 5;
+    if (count > 50) count = 50;
+    consecutiveRequired = count;
+    // Reset consecutive count when changing requirement
+    consecutiveCount = 0;
+}
+
+uint8_t MLPredictor::getConsecutiveRequired() {
+    return consecutiveRequired;
+}
+
+uint8_t MLPredictor::getConsecutiveCount() {
+    return consecutiveCount;
+}
+
+float MLPredictor::getLastProbability() {
+    return lastProbability;
 }
 
 #ifdef ENABLE_ML_LOGGER

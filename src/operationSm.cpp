@@ -10,16 +10,28 @@ u8 enabledProfiles = 5;
 bool idleOnlyWithMag = true;
 bool joystickLockout = false;
 u16 mlPreSpinTimeout = 500; // Default ML pre-spin timeout in ms
+u8 mlConsecutiveRequired = 20; // Default ML consecutive predictions required
+// Simple mode wrappers
+u8 simpleIdleMode = 0;      // 0=Off, 1=Always, 2=Angle, 3=ML, 4=ML Smooth
+u8 idleAngleSetting = 3;    // Index into angle options (0=10°, 1=15°... 5=35°), default 25°
+u8 mlSensitivity = 1;       // 0=Low(50), 1=Medium(20), 2=High(5)
+u8 rampdownSetting = 1;     // 0=Short(300ms), 1=Medium(600ms), 2=Long(1000ms)
 #if HW_VERSION == 1
 bool idleEnabled = false;
 #define CHECK_IDLE_EN (idleEnabled && (!idleOnlyWithMag || (magPresent || !foundTof)))
 #define CHECK_ANGLE_OK (true)
+// HW_VERSION 1 doesn't have ML, just return idleRpm
+inline i32 getProportionalIdleRpm() { return idleRpm; }
 #elif HW_VERSION == 2
 u8 idleEnabled = 0;
 const fix32 IDLE_5_DEG = fix32(5.0 * PI / 180.0);
+
+// Forward declaration for ML Smooth mode
+i32 getProportionalIdleRpm();
+
 bool checkIdle() {
     static bool lastIdleEnabled = false;
-    
+
     // Check if ML predict mode (mode 8)
     if (idleEnabled == 8) {
         // ML mode: only idle when predictor says to pre-spin
@@ -27,11 +39,78 @@ bool checkIdle() {
                           (!idleOnlyWithMag || (magPresent || !foundTof));
         return lastIdleEnabled;
     }
-    
+
+    // Check if ML smooth mode (mode 9)
+    if (idleEnabled == 9) {
+        // ML smooth mode: idle when smoothed probability is above minimum threshold
+        // The actual RPM will be scaled by getProportionalIdleRpm()
+        // Note: getProportionalIdleRpm() updates smoothedProb, so we check if RPM > 0
+        i32 proportionalRpm = getProportionalIdleRpm();
+        lastIdleEnabled = (proportionalRpm > 0) &&
+                          (!idleOnlyWithMag || (magPresent || !foundTof));
+        return lastIdleEnabled;
+    }
+
     // Original idle logic for other modes
     fix32 threshold = IDLE_5_DEG * idleEnabled + (lastIdleEnabled ? (IDLE_5_DEG / 3) : (-IDLE_5_DEG / 3));
     lastIdleEnabled = idleEnabled && (idleEnabled == 1 || pitch.abs() < threshold) && (!idleOnlyWithMag || (magPresent || !foundTof));
     return lastIdleEnabled;
+}
+
+// Smoothed probability and RPM for ML Smooth mode
+static float smoothedProb = 0.0f;
+static float smoothedRpm = 0.0f;
+
+// Get smoothed probability for ML Smooth mode
+float getSmoothedProbability() {
+    float rawProb = MLPredictor::getLastProbability();
+
+    // Exponential moving average: alpha controls smoothing
+    // Lower alpha = more smoothing, slower response
+    // Higher alpha = less smoothing, faster response
+    const float ALPHA_UP = 0.06f;    // Gradual ramp up
+    const float ALPHA_DOWN = 0.015f; // Very slow ramp down (avoids twitching)
+
+    float alpha = (rawProb > smoothedProb) ? ALPHA_UP : ALPHA_DOWN;
+    smoothedProb = alpha * rawProb + (1.0f - alpha) * smoothedProb;
+
+    return smoothedProb;
+}
+
+// Get proportional idle RPM based on ML probability (for ML Smooth mode)
+i32 getProportionalIdleRpm() {
+    if (idleEnabled != 9) {
+        return idleRpm;
+    }
+
+    float prob = getSmoothedProbability();
+
+    // Scale from minimum (40% of idle RPM) to full idle RPM based on probability
+    // prob < 0.15: motors off
+    // prob 0.15-0.50: linear ramp from 40% to 100% of idle RPM
+    // prob 0.50+: full idle RPM
+
+    const float MIN_PROB = 0.15f;    // Higher threshold to avoid false triggers
+    const float FULL_PROB = 0.50f;
+    const float MIN_RPM_RATIO = 0.40f;  // 40% of idle RPM at minimum
+
+    float targetRpm;
+    if (prob <= MIN_PROB) {
+        targetRpm = 0.0f;
+    } else if (prob >= FULL_PROB) {
+        targetRpm = (float)idleRpm;
+    } else {
+        // Linear interpolation between MIN_PROB and FULL_PROB
+        float ratio = (prob - MIN_PROB) / (FULL_PROB - MIN_PROB);
+        float rpmRatio = MIN_RPM_RATIO + ratio * (1.0f - MIN_RPM_RATIO);
+        targetRpm = idleRpm * rpmRatio;
+    }
+
+    // Smooth the RPM output as well
+    const float RPM_ALPHA = 0.03f;  // Heavy smoothing on final RPM
+    smoothedRpm = RPM_ALPHA * targetRpm + (1.0f - RPM_ALPHA) * smoothedRpm;
+
+    return (i32)smoothedRpm;
 }
 #define CHECK_IDLE_EN (checkIdle())
 u8 maxFireAngleSetting = 0;
@@ -97,9 +176,19 @@ void sendEdtStart() {
 
 void setIdleState(MenuItem *_item) {
 	mainMenu->search("idleRpm")->setVisible(idleEnabled);
-	mainMenu->search("previewIdlingInMenu")->setVisible(idleEnabled);
+	mainMenu->search("previewIdlingInMenu")->setVisible(idleEnabled && expertMode);
+	updateExpertVisibility(nullptr);  // Update ML settings visibility too
 	DEBUG_PRINTF("idle: %d\n", idleEnabled);
 }
+
+#if HW_VERSION == 2
+void updateMLSettings(MenuItem *_item) {
+	// Update ML predictor with new settings
+	MLPredictor::setTimeout(mlPreSpinTimeout);
+	MLPredictor::setConsecutiveRequired(mlConsecutiveRequired);
+	DEBUG_PRINTF("ML settings updated: timeout=%d, consecutive=%d\n", mlPreSpinTimeout, mlConsecutiveRequired);
+}
+#endif
 
 void __not_in_flash_func(runOperationSm)() {
 	static bool firstRun = true;
@@ -254,6 +343,9 @@ void __not_in_flash_func(runOperationSm)() {
 		}
 		if (openedMenu != nullptr || opStateTime > 100000) {
 			mainMenu->init();
+#if HW_VERSION == 2
+			syncSimpleModeValues();  // Sync simple mode values AFTER init resets runtime options
+#endif
 			operationState = STATE_MENU;
 		}
 		setAllThrottles(0);
@@ -263,7 +355,8 @@ void __not_in_flash_func(runOperationSm)() {
 		// go to off or idle state when profile is selected
 		// show profile selection on the screen
 		if (CHECK_IDLE_EN) {
-			pidLoop(idleRpm, idleRpm);
+			i32 targetRpm = getProportionalIdleRpm();
+			pidLoop(targetRpm, targetRpm);
 		} else {
 			resetPid();
 			setAllThrottles(0);
@@ -410,7 +503,8 @@ void __not_in_flash_func(runOperationSm)() {
 #endif
 
 		if (CHECK_IDLE_EN) {
-			pidLoop(idleRpm, idleRpm);
+			i32 targetRpm = getProportionalIdleRpm();
+			pidLoop(targetRpm, targetRpm);
 			if (inactivityTimer > 1000 * 60 * inactivityTimeout && inactivityTimeout) setAllThrottles(0);
 		} else {
 			setAllThrottles(0);

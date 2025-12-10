@@ -126,6 +126,8 @@ void onFireModeChange(MenuItem *_item) {
 #if HW_VERSION == 1
 	mainMenu->search("dartsPerSecond")->setVisible(fireMode != FIRE_SINGLE);
 #elif HW_VERSION == 2
+	// Simple mode burst count visibility
+	mainMenu->search("simpleBurstCount")->setVisible(fireMode == FIRE_BURST);
 	showDpsOrLimit(nullptr);
 #endif
 	calcPushDurations(nullptr);

@@ -286,8 +286,8 @@ void printJoystickGuideDot(bool force = false) {
 		return;
 	}
 	lastAngle = joystickAngle;
-	i32 thisMag = constrain(joystickMagnitude - 10, 0, GESTURE_CENTER_LARGE_PCT - 20);
-	thisMag = map(thisMag, 0, GESTURE_CENTER_LARGE_PCT - 20, 0, GESTURE_CENTER_LARGE_PCT);
+	// Direct mapping without dead zone
+	i32 thisMag = constrain(joystickMagnitude, 0, GESTURE_CENTER_LARGE_PCT);
 	startFixTrig();
 	u8 x = 200 - (i32)(cosFix(lastAngle) * thisMag * 9 / GESTURE_CENTER_LARGE_PCT + fix32(0.5f)).geti32();
 	u8 y = 95 + (i32)(sinFix(lastAngle) * thisMag * 9 / GESTURE_CENTER_LARGE_PCT + fix32(0.5f)).geti32();
@@ -399,6 +399,52 @@ void drawProfileSpecs(const char *p00, const char *p01, const char *p10, const c
 	printCentered(p11, SCREEN_WIDTH * 3 / 4, 68, SCREEN_WIDTH / 2, 1, 12, ClipBehavior::CLIP_TEXT);
 #endif
 }
+
+#if HW_VERSION == 2
+// Draw ML prediction confidence bar on home screen
+void drawMLConfidenceBar() {
+	// Show for ML Predict (8) or ML Smooth (9) modes
+	if (idleEnabled != 8 && idleEnabled != 9) {
+		return;
+	}
+
+	float prob = MLPredictor::getLastProbability();
+
+	// Bar dimensions - compact, positioned below dart count
+	const int BAR_X = 4;
+	const int BAR_Y = 95;
+	const int BAR_WIDTH = 100;
+	const int BAR_HEIGHT = 8;
+
+	// Calculate fill based on probability (0-100%)
+	int progress = constrain((int)(prob * 100.0f), 0, 100);
+
+	// Draw bar frame
+	tft.drawRect(BAR_X, BAR_Y, BAR_WIDTH, BAR_HEIGHT, ST77XX_WHITE);
+
+	// Fill based on probability
+	int fill_width = (progress * (BAR_WIDTH - 2)) / 100;
+
+	// Color gradient based on probability
+	uint16_t barColor;
+	if (prob < 0.15f) {
+		barColor = tft.color565(60, 60, 60);  // Dark gray when below threshold
+	} else if (prob < 0.35f) {
+		barColor = ST77XX_YELLOW;
+	} else {
+		barColor = ST77XX_GREEN;
+	}
+
+	if (fill_width > 0) {
+		tft.fillRect(BAR_X + 1, BAR_Y + 1, fill_width, BAR_HEIGHT - 2, barColor);
+	}
+
+	// Clear the unfilled portion
+	if (fill_width < BAR_WIDTH - 2) {
+		tft.fillRect(BAR_X + 1 + fill_width, BAR_Y + 1, BAR_WIDTH - 2 - fill_width, BAR_HEIGHT - 2, HOME_BACKGROUND_COLOR);
+	}
+}
+#endif
 
 void displayLoop() {
 	volatile u32 state = operationState; // cache the operationState because the other core might change it
@@ -671,19 +717,35 @@ void displayLoop() {
 
 		// print fire modes
 		if (fireModeUpdate) {
+#if HW_VERSION == 1
 			SET_DEFAULT_FONT;
 			if (fireMode == FIRE_BURST)
 				snprintf(buf, 13, "%s: %d", fireModeNames[fireMode], burstCount);
 			else
 				strcpy(buf, fireModeNames[fireMode]);
-#if HW_VERSION == 1
 			tft.setCursor(SCREEN_WIDTH - strlen(buf) * 6, 0);
-#elif HW_VERSION == 2
-			tft.setCursor(SCREEN_WIDTH - strlen(buf) * 13 / 2, 0);
-			speakerLoopOnFastCore = true;
-#endif
 			tft.setTextColor(lastDcUpdating ? ((ST7735_WHITE >> 1) & 0b0111101111101111) : ST7735_WHITE);
 			tft.print(buf);
+#elif HW_VERSION == 2
+			speakerLoopOnFastCore = true;
+			// Clear old fire mode area
+			tft.fillRect(100, 0, 140, 20, HOME_BACKGROUND_COLOR);
+			// Use same font as profile name for consistency
+			tft.setFont(&FreeSans9pt7b);
+			if (fireMode == FIRE_BURST)
+				snprintf(buf, 13, "%s:%d", fireModeNames[fireMode], burstCount);
+			else
+				strcpy(buf, fireModeNames[fireMode]);
+			// Right-align with padding
+			int16_t x1, y1;
+			uint16_t w, h;
+			tft.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+			tft.setCursor(SCREEN_WIDTH - w - 4, 13);
+			// White text to match profile name style
+			tft.setTextColor(lastDcUpdating ? ((ST7735_WHITE >> 1) & 0b0111101111101111) : ST7735_WHITE);
+			tft.print(buf);
+			SET_DEFAULT_FONT;
+#endif
 		}
 
 		// print or erase joystick lockout message
@@ -699,7 +761,7 @@ void displayLoop() {
 			}
 		}
 
-		// print battery voltage
+		// print battery percentage
 		static elapsedMillis batUpdateTimer = 200;
 		if (batUpdateTimer > 200) {
 			batUpdateTimer = 0;
@@ -710,20 +772,56 @@ void displayLoop() {
 			speakerLoopOnFastCore = true;
 #endif
 			batUpdate = false;
+#if HW_VERSION == 1
 			if (batState == BAT_RUNNING)
 				snprintf(buf, 16, "%.2fV, %dS", ((fix32)batVoltage).getf32() / batCellCount, batCellCount);
 			else
 				snprintf(buf, 16, "%.2fV", ((fix32)batVoltage).getf32());
+#elif HW_VERSION == 2
+			// Calculate battery percentage (3.3V empty, 4.2V full per cell)
+			float cellVoltage = ((fix32)batVoltage).getf32() / batCellCount;
+			int batPercent = constrain((int)((cellVoltage - 3.3f) / 0.9f * 100.0f), 0, 100);
+			snprintf(buf, 16, "%d%%", batPercent);
+#endif
 			if (strcmp(buf, lastBatString) != 0 || forceBatUpdate) {
+				uint16_t batColor = (motorDisableFlags & MD_BATTERY_EMPTY) ? ST77XX_RED : (batWarning ? ST77XX_YELLOW : (lastDcUpdating ? ((ST7735_WHITE >> 1) & 0b0111101111101111) : ST7735_WHITE));
+#if HW_VERSION == 1
 				SET_DEFAULT_FONT;
 				tft.setTextColor(HOME_BACKGROUND_COLOR);
 				tft.setCursor(0, SCREEN_HEIGHT - YADVANCE);
 				tft.print(lastBatString);
-				tft.setTextColor((motorDisableFlags & MD_BATTERY_EMPTY) ? ST77XX_RED : (batWarning ? ST77XX_YELLOW : (lastDcUpdating ? ((ST7735_WHITE >> 1) & 0b0111101111101111) : ST7735_WHITE)));
+				tft.setTextColor(batColor);
 				tft.getTextBounds(buf, 0, 0, &x1, &y1, &width, &height);
 				tft.setCursor(0, SCREEN_HEIGHT - YADVANCE);
 				tft.print(buf);
 				lastBatWidth = width;
+#elif HW_VERSION == 2
+				// Draw battery icon + percentage at bottom left
+				const int BAT_X = 4;
+				const int BAT_Y = 115;
+				const int BAT_W = 20;
+				const int BAT_H = 10;
+
+				// Clear old battery area
+				tft.fillRect(0, BAT_Y - 2, 60, 20, HOME_BACKGROUND_COLOR);
+
+				// Draw battery outline
+				tft.drawRect(BAT_X, BAT_Y, BAT_W, BAT_H, batColor);
+				tft.fillRect(BAT_X + BAT_W, BAT_Y + 2, 2, BAT_H - 4, batColor);  // Battery tip
+
+				// Fill based on percentage
+				int fillW = (batPercent * (BAT_W - 2)) / 100;
+				if (fillW > 0) {
+					tft.fillRect(BAT_X + 1, BAT_Y + 1, fillW, BAT_H - 2, batColor);
+				}
+
+				// Draw percentage text next to icon
+				SET_DEFAULT_FONT;
+				tft.setTextColor(batColor);
+				tft.setCursor(BAT_X + BAT_W + 6, BAT_Y);
+				tft.print(buf);
+				lastBatWidth = BAT_W + 30;
+#endif
 				memcpy(lastBatString, buf, 16);
 			}
 		}
@@ -796,18 +894,15 @@ void displayLoop() {
 			rpmUpdate = false;
 			SET_DEFAULT_FONT;
 			tft.setTextColor(lastDcUpdating ? ((ST7735_WHITE >> 1) & 0b0111101111101111) : ST7735_WHITE);
+#if HW_VERSION == 1
+			// HW1: Keep original 2-line RPM display
 			if (motorDisableFlags & MD_ESC_OVERTEMP)
 				snprintf(buf, 12, "%3d C %3d C", escTemp[0], escTemp[2]);
 			else
 				snprintf(buf, 12, "%4.1fk %4.1fk", escRpm[0] / 1000.f, escRpm[2] / 1000.f);
 			if (strcmp(buf, lastRpm0) != 0 || forceRpmUpdate) {
-#if HW_VERSION == 1
 				tft.fillRect(94, 14, 66, 8, HOME_BACKGROUND_COLOR);
 				tft.setCursor(94, 14);
-#elif HW_VERSION == 2
-				tft.fillRect(165, 24, 75, 12, HOME_BACKGROUND_COLOR);
-				tft.setCursor(165, 24);
-#endif
 				tft.print(buf);
 				strncpy(lastRpm0, buf, 16);
 			}
@@ -816,16 +911,32 @@ void displayLoop() {
 			else
 				snprintf(buf, 12, "%4.1fk %4.1fk", escRpm[1] / 1000.f, escRpm[3] / 1000.f);
 			if (strcmp(buf, lastRpm1) != 0 || forceRpmUpdate) {
-#if HW_VERSION == 1
 				tft.fillRect(94, 24, 66, 8, HOME_BACKGROUND_COLOR);
 				tft.setCursor(94, 24);
-#elif HW_VERSION == 2
-				tft.fillRect(165, 42, 75, 12, HOME_BACKGROUND_COLOR);
-				tft.setCursor(165, 42);
-#endif
 				tft.print(buf);
 				strncpy(lastRpm1, buf, 16);
 			}
+#elif HW_VERSION == 2
+			// HW2: Single RPM percentage (average of front motors vs target)
+			if (motorDisableFlags & MD_ESC_OVERTEMP) {
+				int maxTemp = max(max(escTemp[0], escTemp[1]), max(escTemp[2], escTemp[3]));
+				snprintf(buf, 12, "%d\xB0""C", maxTemp);  // Show max temp with degree symbol
+			} else {
+				float avgRpm = (escRpm[0] + escRpm[2]) / 2.0f;  // Average of front motors
+				int rpmPercent = (targetRpm > 0) ? constrain((int)(avgRpm / targetRpm * 100.0f), 0, 100) : 0;
+				snprintf(buf, 12, "%d%%", rpmPercent);
+			}
+			if (strcmp(buf, lastRpm0) != 0 || forceRpmUpdate) {
+				tft.fillRect(175, 35, 65, 30, HOME_BACKGROUND_COLOR);  // Clear area (moved lower/right)
+				tft.setFont(&FreeSans12pt7b);  // Larger font for single value
+				tft.setCursor(175, 55);  // Moved lower and right
+				tft.print(buf);
+				SET_DEFAULT_FONT;
+				strncpy(lastRpm0, buf, 16);
+			}
+			// Clear second line cache since we don't use it anymore
+			lastRpm1[0] = '\0';
+#endif
 		}
 
 		// print joystick guide dot
@@ -835,6 +946,13 @@ void displayLoop() {
 			updateTimer = 0;
 			speakerLoopOnFastCore = true;
 			printJoystickGuideDot();
+		}
+
+		// Draw ML confidence bar (updates at ~20 Hz)
+		static elapsedMillis mlBarUpdateTimer = 50;
+		if (mlBarUpdateTimer >= 50) {
+			mlBarUpdateTimer = 0;
+			drawMLConfidenceBar();
 		}
 #endif
 	} break;

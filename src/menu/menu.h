@@ -15,6 +15,12 @@ extern u16 profileColor565;
 extern u8 rotationTickSensitivity;
 extern const char rotationSensitivityStrings[3][10];
 
+extern bool expertMode;
+
 void initMenu();
 bool saveAndClose(MenuItem *item);
 void loadSettings();
+void updateExpertVisibility(MenuItem *_item);
+#if HW_VERSION == 2
+void syncSimpleModeValues();
+#endif
