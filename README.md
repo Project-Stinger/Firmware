@@ -1,38 +1,81 @@
 # Stinger Firmware
 
-This repository contains the firmware for the Stinger foam dart blaster. Core features include:
+Firmware for the Stinger foam dart blaster with ML-based pre-fire prediction.
 
--   PID controller for flywheel RPM
--   Bidirectional DShot using the RP2040's PIO
--   Closed loop solenoid control
--   Multiple firing modes
--   Menu system controlled by a joystick and a screen
--   IMU for motion sensing (safety features, automatic idle, ...)
--   Speaker and LED output
--   Tournament mode
+## Features
+
+- PID controller for flywheel RPM
+- Bidirectional DShot using RP2040's PIO
+- Closed loop solenoid control
+- Multiple firing modes
+- Menu system (joystick + display)
+- IMU for motion sensing
+- ML pre-fire prediction (predicts trigger pulls 100-400ms in advance)
+- Speaker and LED output
+- Tournament mode
+
+## Building
+
+Built with [PlatformIO](https://platformio.org/). Use the VSCode extension or CLI.
+
+1. Select target: `Ctrl+Shift+P` then "PlatformIO: Pick project environment" then v1 or v2
+2. Build and upload using the bottom bar buttons
+
+See `platformio.ini` for debug options.
+
+## ML Prediction
+
+The firmware uses a Random Forest model to predict trigger pulls before they happen, enabling flywheel pre-spin for faster shots.
+
+### How It Works
+
+- Input: IMU data (accelerometer + gyroscope) at 1600 Hz
+- Features: 42 features extracted from 50-sample sliding window
+- Model: Random Forest (10 trees, ~104 KB)
+- Inference: Runs at ~167 Hz (every 6ms)
+
+### Tunable Parameters (via menu)
+
+| Setting | Default | Range | Effect |
+|---------|---------|-------|--------|
+| Sensitivity | 20 | 5-50 | Consecutive predictions required (lower = faster, more false positives) |
+| Confidence | 0.35 | 0.1-0.9 | Prediction threshold (higher = fewer false positives) |
+
+### Data Collection
+
+Use `capture_data.py` to record IMU data for training:
+
+```bash
+python capture_data.py
+```
+
+Data is saved to `nerf_imu_data.csv`.
+
+### Retraining the Model
+
+```bash
+cd MLmodel
+pip install -r requirements.txt
+python run_full_pipeline.py
+cp outputs/deployment/rf_model.h ../src/
+```
+
+Key files:
+- `capture_data.py` - Data collection script
+- `MLmodel/*.py` - Training pipeline
+- `src/ml_predictor.cpp` - Firmware inference
+- `src/rf_model.h` - Exported model weights
 
 ## Documentation
 
-Documentation for using the firmware is provided in the [Stinger-Docs wiki](https://github.com/bastian2001/Stinger-Docs/wiki).
+See the [Stinger-Docs wiki](https://github.com/bastian2001/Stinger-Docs/wiki).
 
 ## Contributing
 
-There are several ways in which you can contribute to this firmware
-
--   **Bug reports**: If you find a bug, please [open an issue](https://github.com/The-Stinger/stinger-firmware/issues/new) on GitHub.
--   **Feature requests**: If you have an idea for a new feature, please [open an issue](https://github.com/The-Stinger/stinger-firmware/issues/new)
--   **Pull requests**: If you want to contribute code, please fork the repository and submit a pull request. Please file an issue first to discuss the changes you want to make. This helps to avoid duplicate work and ensures that your changes are in line with the project's goals.
-
-## Building the firmware
-
-The firmware is written in C++ and uses the [PlatformIO](https://platformio.org/) build system. It is recommended to use the [VSCode extension](https://marketplace.visualstudio.com/items?itemName=platformio.platformio-ide) for PlatformIO, but you can also use the command line interface. To select your target (V1 or V2), press `Ctrl+Shift+P` (View -> Command Palette) in VSCode, search for "PlatformIO: Pick project environment" and select either v1 or v2. You can then build and upload the firmware using the buttons in the bottom bar of VSCode (you can also assign shortcuts).
-
-You may find some options from the `platformio.ini` file useful for debugging and development, such as the blackbox or debug print statements.
-
-## Missing something?
-
-This project is still in the early stages of making the source available. If you feel like something is missing in order to make this repo accessible, please open an issue or ask in the discussion forum.
+- Bug reports: [Open an issue](https://github.com/The-Stinger/stinger-firmware/issues/new)
+- Feature requests: [Open an issue](https://github.com/The-Stinger/stinger-firmware/issues/new)
+- Pull requests: Fork, file an issue first, then submit PR
 
 ## License
 
-This project is licensed under the Polyform non-commercial license. See the [LICENSE](https://github.com/The-Stinger/stinger-firmware?tab=License-1-ov-file) file for details.
+[Polyform Non-Commercial License](LICENSE)
