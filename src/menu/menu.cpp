@@ -233,7 +233,7 @@ void initMenu() {
 	motorExpertPage2
 		->addChild(new MenuItem(VariableType::U16, &rampdownTime, 1000, 50, 200, 3000, 1, 0, EEPROM_POS_RAMPDOWN_SPEED, true, "rampdownTime", "Rampdown ms", "Time to ramp down the motors to idle/off after firing"))
 		->addChild(new MenuItem(VariableType::U16, &revAfterFire, 0, 50, 0, 2000, 1, 0, EEPROM_POS_REV_AFTER_FIRE, true, "revAfterFire", "Rev Hold Time", "Time in ms that the blaster will keep revving for after firing, useful for quick single trigger pulls"))
-		->addChild(new MenuItem(VariableType::U8, &escMaxTemp, 100, 1, 60, 130, 1, 0, EEPROM_POS_ESC_MAX_TEMP, false, "maxEscTemp", "Max. ESC Temp", "In degrees Celsius, temperature above which the ESCs will be disabled. The ESC may have its own thermal protection, this can be used to lower that limit, but not extend it."))
+		->addChild(new MenuItem(VariableType::U8, &escMaxTemp, 100, 1, 60, 255, 1, 0, EEPROM_POS_ESC_MAX_TEMP, false, "maxEscTemp", "Max. ESC Temp", "In degrees Celsius, temperature above which the ESCs will be disabled. The ESC may have its own thermal protection, this can be used to lower that limit, but not extend it."))
 		->addChild(new MenuItem(MenuItemType::ACTION, "motorExpertBackTo1", "Previous Page"));
 	motorExpertPage2->search("motorExpertBackTo1")->setOnEnterFunction(exitParent);
 
