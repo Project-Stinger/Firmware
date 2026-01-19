@@ -48,10 +48,6 @@ bool calibrateEscTemp(MenuItem *_item) {
 	}
 	mutex_enter_blocking(&escMutex);
 	for (int i = 0; i < 4; i++) {
-		if (escTempRaw[i] > 80) {
-			showTempCalResult(1);
-			return false;
-		}
 		if (!escTempRaw[i]) {
 			showTempCalResult(3);
 			return false;
