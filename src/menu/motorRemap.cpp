@@ -34,6 +34,12 @@ bool startRemap(MenuItem *_item) {
 	remapState = REMAP_START;
 	lastRemapState = REMAP_ERROR;
 	calibrateSuccess = false;
+	volatile u8 newPins[4];
+	for (int i = 0; i < 4; i++) {
+		newPins[i] = PIN_MOTOR_BASE + i;
+		newPinout[i] = 255;
+	}
+	updateEscPins(newPins);
 	return true;
 }
 
@@ -83,7 +89,7 @@ bool remapLoop(MenuItem *item) {
 	switch (remapState) {
 	case REMAP_START: {
 		// Display: One motor will spin up at a time. Push the joystick into the direction of the spinning motor. Hold left to discard any changes.
-		if (newState) {
+		if (newState || item->fullRedraw) {
 			tft.fillScreen(ST77XX_BLACK);
 			tft.setTextColor(ST77XX_WHITE);
 #if HW_VERSION == 1
@@ -122,7 +128,7 @@ bool remapLoop(MenuItem *item) {
 	case REMAP_ESC3:
 	case REMAP_ESC4: {
 		static u8 selectedEsc;
-		if (newState && remapState == REMAP_ESC1) {
+		if ((newState && remapState == REMAP_ESC1) || item->fullRedraw) {
 			tft.fillScreen(ST77XX_BLACK);
 			tft.setTextColor(ST77XX_WHITE);
 #if HW_VERSION == 2
@@ -149,7 +155,7 @@ bool remapLoop(MenuItem *item) {
 		if (gestureUpdated) {
 			gestureUpdated = false;
 			if (lastGesture.type == GESTURE_RELEASE && selectedEsc < 4) {
-				newPinout[selectedEsc] = escPins[remapState - REMAP_ESC1];
+				newPinout[selectedEsc] = PIN_MOTOR_BASE + remapState - REMAP_ESC1;
 				menuOverrideEsc[remapState - REMAP_ESC1] = 0;
 				remapState++;
 				drawMotor(selectedEsc, ST77XX_BLACK);
@@ -195,6 +201,9 @@ bool remapLoop(MenuItem *item) {
 				remapState = REMAP_ERROR;
 				break;
 			}
+			updateEscPins(newPinout);
+		}
+		if (newState || item->fullRedraw) {
 			tft.fillScreen(ST77XX_BLACK);
 			tft.setTextColor(ST77XX_WHITE);
 			SET_DEFAULT_FONT;
@@ -213,8 +222,6 @@ bool remapLoop(MenuItem *item) {
 			tft.drawCircle(MOTOR_SCREEN_X_1, MOTOR_SCREEN_Y_2, MOTOR_SCREEN_RADIUS + 1, ST77XX_WHITE);
 			tft.drawCircle(MOTOR_SCREEN_X_2, MOTOR_SCREEN_Y_1, MOTOR_SCREEN_RADIUS + 1, ST77XX_WHITE);
 			tft.drawCircle(MOTOR_SCREEN_X_2, MOTOR_SCREEN_Y_2, MOTOR_SCREEN_RADIUS + 1, ST77XX_WHITE);
-
-			updateEscPins(newPinout);
 		}
 		if (gestureUpdated) {
 			DEBUG_PRINTF("Gesture: %d %d %d\n", lastGesture.type, lastGesture.direction, lastGesture.duration);
@@ -262,7 +269,7 @@ bool remapLoop(MenuItem *item) {
 	} break;
 	case REMAP_ERROR: {
 		// Display: Error, invalid motor config.
-		if (newState) {
+		if (newState || item->fullRedraw) {
 			tft.fillScreen(ST77XX_BLACK);
 			tft.setTextColor(ST77XX_RED);
 			tft.setTextWrap(true);
@@ -283,7 +290,7 @@ bool remapLoop(MenuItem *item) {
 				printCentered("< Exit   Retry >", SCREEN_WIDTH / 2, 70, SCREEN_WIDTH, 1, 9, ClipBehavior::PRINT_LAST_LINE_CENTERED);
 			tft.setFont(&FreeSansBold12pt7b);
 			printCentered("Motor mapping", SCREEN_WIDTH / 2, 20, SCREEN_WIDTH, 1, 0, ClipBehavior::PRINT_LAST_LINE_DOTS);
-			Serial.println("Invalid motor config, remap aborted.");
+			DEBUG_PRINTSLN("Invalid motor config, remap aborted.");
 #endif
 		}
 		if (gestureUpdated) {
@@ -299,5 +306,6 @@ bool remapLoop(MenuItem *item) {
 		}
 	} break;
 	}
+	item->fullRedraw = false;
 	return false;
 }
