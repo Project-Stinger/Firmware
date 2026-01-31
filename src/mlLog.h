@@ -1,7 +1,6 @@
 #pragma once
 #if HW_VERSION == 2
 
-#ifdef USE_ML_LOG
 #ifdef ENABLE_DEBUG_GYRO
 #error "USE_ML_LOG and ENABLE_DEBUG_GYRO both use Serial input — enable only one"
 #endif
@@ -17,8 +16,11 @@ struct __attribute__((packed)) MlSample {
 	u8 trigger;
 };
 
-/// @brief Called once from setup() on core 0.
+/// @brief Called once from setup() on core 0. Mounts filesystem only.
 void mlLogInit();
+
+/// @brief Called from menu to start recording.
+void mlLogStartRecording();
 
 /// @brief Called from loop1() (core 1). Captures 100Hz samples into a RAM buffer.
 void mlLogLoop();
@@ -26,6 +28,10 @@ void mlLogLoop();
 /// @brief Called from loop() (core 0). Flushes RAM buffer to flash when safe.
 void mlLogSlowLoop();
 
-#endif // USE_ML_LOG
-#endif // HW_VERSION == 2
+/// @brief Returns true if ML logging is actively recording.
+bool mlLogIsActive();
 
+/// @brief Returns flash usage as 0–100 percentage.
+u8 mlLogFlashPercent();
+
+#endif // HW_VERSION == 2
