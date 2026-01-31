@@ -329,7 +329,11 @@ void initMenu() {
 		->addChild(hardwareMenu)
 		->addChild(new MenuItem(MenuItemType::CUSTOM, "docs", "Documentation"))
 		->addChild(firmwareInfoMenu)
-		->addChild(resetMenu);
+		->addChild(resetMenu)
+#if HW_VERSION == 2
+		->addChild(new MenuItem(MenuItemType::ACTION, "mlRecording", "ML Recording", "Start recording IMU data to flash for ML training"))
+#endif
+		;
 	bootScreen
 		->addChild(new MenuItem(deviceName, 16, "Stinger", EEPROM_POS_DEVICE_NAME, false, "deviceName", "Device Name"))
 		->addChild(new MenuItem(ownerName, 32, "John Doe", EEPROM_POS_OWNER_NAME, false, "ownerName", "Owner"))
@@ -504,6 +508,12 @@ void initMenu() {
 		->setOnEnterFunction(enableTournamentMode)
 		->setVisible(false);
 #if HW_VERSION == 2
+	mainMenu->search("mlRecording")->setOnEnterFunction([](MenuItem *_item) -> bool {
+		if (!mlLogIsActive()) {
+			mlLogStartRecording();
+		}
+		return false;
+	});
 	mainMenu->search("ledBrightness")
 		->setOnEnterFunction(onBrightnessEnter)
 		->setOnExitFunction(onBrightnessExit)
