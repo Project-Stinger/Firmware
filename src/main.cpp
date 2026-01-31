@@ -82,6 +82,9 @@ void setup() {
 	initGyroSpi();
 	gyroInit();
 	imuInit();
+#ifdef USE_ML_LOG
+	mlLogInit();
+#endif
 #endif
 	setupDone |= 0b01;
 	while (setupDone != 0b11) {
@@ -118,6 +121,11 @@ void loop() {
 		openedMenu->loop();
 	}
 	tournamentLoop();
+#if HW_VERSION == 2
+#ifdef USE_ML_LOG
+	mlLogSlowLoop();
+#endif
+#endif
 }
 
 void setup1() {
@@ -165,6 +173,9 @@ void loop1() {
 			gyroLoop();
 			freeFallDetection();
 			updateAtti1();
+#ifdef USE_ML_LOG
+			mlLogLoop();
+#endif
 			gyroCycle = false;
 		} else {
 			updateAtti2();
