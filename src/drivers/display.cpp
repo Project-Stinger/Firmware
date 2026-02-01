@@ -691,20 +691,33 @@ void displayLoop() {
 		{
 			static elapsedMillis mlUpdateTimer = 1000;
 			static char lastMlStr[8] = "";
-			if (mlUpdateTimer > 1000) {
+			static u16 lastColor = 0;
+			u32 periodMs = 1000;
+			if (!mlLogIsActive()) {
+				u8 pct = 0;
+				if (mlIdleGetConfidencePct(&pct)) periodMs = 200;
+			}
+			if (mlUpdateTimer > periodMs) {
 				mlUpdateTimer = 0;
 				char mlStr[8] = "";
 				if (mlLogIsActive()) {
 					snprintf(mlStr, sizeof(mlStr), "R%d%%", mlLogFlashPercent());
+					lastColor = ST77XX_RED;
+				} else {
+					u8 pct = 0;
+					if (mlIdleGetConfidencePct(&pct)) {
+						snprintf(mlStr, sizeof(mlStr), "%d%%", pct);
+						lastColor = ST77XX_CYAN;
+					}
 				}
 				if (strcmp(mlStr, lastMlStr) != 0) {
 					SET_DEFAULT_FONT;
 					speakerLoopOnFastCore = true;
 					// erase old
-					tft.fillRect(105, 0, 30, YADVANCE, HOME_BACKGROUND_COLOR);
+					tft.fillRect(95, 0, 60, YADVANCE, HOME_BACKGROUND_COLOR);
 					if (mlStr[0]) {
 						tft.setCursor(105, 0);
-						tft.setTextColor(ST77XX_RED);
+						tft.setTextColor(lastColor);
 						tft.print(mlStr);
 					}
 					strcpy(lastMlStr, mlStr);

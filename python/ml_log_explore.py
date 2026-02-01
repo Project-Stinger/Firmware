@@ -73,6 +73,61 @@ def read_ml_csv(path: Path) -> tuple[list[int], list[int], list[int], list[int],
     return ts, ax, ay, az, gx, gy, gz, trig
 
 
+def motion_score_window(
+    ax: list[int],
+    ay: list[int],
+    az: list[int],
+    gx: list[int],
+    gy: list[int],
+    gz: list[int],
+    start_i: int,
+    end_i: int,
+) -> float:
+    """Heuristic motion score (higher = more motion).
+
+    Used to filter out near-stationary negative windows.
+    Uses mean squared magnitude to avoid sqrt per-sample.
+    """
+    n = end_i - start_i
+    if n <= 0:
+        return 0.0
+    acc = 0.0
+    gyr = 0.0
+    for i in range(start_i, end_i):
+        acc += float(ax[i] * ax[i] + ay[i] * ay[i] + az[i] * az[i])
+        gyr += float(gx[i] * gx[i] + gy[i] * gy[i] + gz[i] * gz[i])
+    # Gyro usually matters more for "gesture/aiming"; keep accel as a smaller term.
+    return (gyr / n) + 0.05 * (acc / n)
+
+
+def sample_unique_with_min_separation(
+    rng,
+    candidates: list[int],
+    ts: list[int],
+    target: int,
+    min_sep_ms: int,
+) -> list[int]:
+    """Sample up to target unique indices with a minimum timestamp separation."""
+    if target <= 0 or not candidates:
+        return []
+    min_sep_ms = max(0, int(min_sep_ms))
+
+    pool = list(dict.fromkeys(candidates))  # de-dup while preserving order
+    rng.shuffle(pool)
+
+    chosen: list[int] = []
+    chosen_ts: list[int] = []
+    for idx in pool:
+        if len(chosen) >= target:
+            break
+        t = ts[idx]
+        if min_sep_ms and any(abs(t - ct) < min_sep_ms for ct in chosen_ts):
+            continue
+        chosen.append(idx)
+        chosen_ts.append(t)
+    return chosen
+
+
 def find_trigger_rising_edges(trig: list[int]) -> list[int]:
     edges: list[int] = []
     for i in range(1, len(trig)):
@@ -172,10 +227,44 @@ def main() -> None:
         help="Number of negative windows per positive window (default: 1)",
     )
     ap.add_argument(
+        "--neg-min-motion-quantile",
+        type=float,
+        default=0.0,
+        help="Reject the lowest-motion negatives. 0 disables; 0.2 rejects lowest 20%% (default: 0)",
+    )
+    ap.add_argument(
+        "--neg-match-pos-motion",
+        action="store_true",
+        help="Try to match negative motion to positive motion (filters candidates by pos motion quantiles).",
+    )
+    ap.add_argument(
+        "--neg-pos-motion-q",
+        type=float,
+        default=0.1,
+        help="If --neg-match-pos-motion: keep negatives within [q,1-q] quantiles of positive motion (default: 0.1)",
+    )
+    ap.add_argument(
+        "--neg-min-sep-ms",
+        type=int,
+        default=250,
+        help="Minimum time separation between sampled negative window ends (default: 250ms)",
+    )
+    ap.add_argument(
+        "--neg-with-replacement",
+        action="store_true",
+        help="Allow sampling negative windows with replacement if you request more than available (default: false)",
+    )
+    ap.add_argument(
         "--neg-strategy",
-        choices=["far", "near"],
+        choices=["far", "near", "mixed"],
         default="far",
-        help="How to sample negatives: far=anywhere away from shots; near=close-in-time before each shot (default: far)",
+        help="How to sample negatives: far=anywhere away from shots; near=close-in-time before each shot; mixed=near+far (default: far)",
+    )
+    ap.add_argument(
+        "--neg-mixed-near-frac",
+        type=float,
+        default=0.5,
+        help="(mixed strategy) Fraction of negatives to draw from near strategy; remainder from far (default: 0.5)",
     )
     ap.add_argument(
         "--neg-near-min-ms",
@@ -193,7 +282,13 @@ def main() -> None:
         "--neg-avoid-post-ms",
         type=int,
         default=1000,
-        help="Avoid sampling negative windows within this many ms after any accepted shot (default: 1000)",
+        help="Avoid sampling negative windows within this many ms after shots (see --neg-avoid-edges) (default: 1000)",
+    )
+    ap.add_argument(
+        "--neg-avoid-edges",
+        choices=["accepted", "all"],
+        default="all",
+        help="Which trigger edges to avoid around when sampling negatives (default: all)",
     )
     ap.add_argument(
         "--seed",
@@ -463,19 +558,35 @@ def main() -> None:
         window_samples = max(1, int(round(args.window_ms / dt_med)))
 
         # Positives: [idx - lead - window, idx - lead)
-        pos_windows: list[tuple[int, int, int]] = []  # (shot_idx, start_i, end_i)
-        for idx in accepted_edges:
-            end_i = idx - lead_samples
+        pos_windows: list[tuple[int, int, int, int]] = []  # (shot_num, edge_i, start_i, end_i)
+        shot_ts = [ts[idx] for idx in accepted_edges]
+        for shot_num, edge_i in enumerate(accepted_edges):
+            end_i = edge_i - lead_samples
             start_i = end_i - window_samples
             if start_i < 0 or end_i <= start_i:
                 continue
-            pos_windows.append((idx, start_i, end_i))
+            pos_windows.append((shot_num, edge_i, start_i, end_i))
+
+        # Motion distribution of positives (used for optional motion-matching of negatives)
+        pos_motion: list[float] = []
+        for _shot_num, _edge_i, start_i, end_i in pos_windows:
+            pos_motion.append(motion_score_window(ax, ay, az, gx, gy, gz, start_i, end_i))
+        pos_motion_sorted = sorted(pos_motion)
+        pos_lo = None
+        pos_hi = None
+        if args.neg_match_pos_motion and pos_motion_sorted:
+            q = max(0.0, min(0.49, float(args.neg_pos_motion_q)))
+            lo_i = int(math.floor(q * (len(pos_motion_sorted) - 1)))
+            hi_i = int(math.ceil((1.0 - q) * (len(pos_motion_sorted) - 1)))
+            pos_lo = pos_motion_sorted[lo_i]
+            pos_hi = pos_motion_sorted[hi_i]
 
         # Build a mask of indices we don't want to sample negatives from (shot-adjacent and post-shot).
         avoid = bytearray(n)
         avoid_post = max(0, args.neg_avoid_post_ms)
-        for idx in accepted_edges:
-            t0_ms = ts[idx]
+        avoid_edges = accepted_edges if args.neg_avoid_edges == "accepted" else all_edges
+        for edge_i in avoid_edges:
+            t0_ms = ts[edge_i]
             lo_t = t0_ms - (args.lead_ms + args.window_ms)  # avoid the actual positive window region
             hi_t = t0_ms + avoid_post
             lo_i = bisect.bisect_left(ts, lo_t)
@@ -490,9 +601,9 @@ def main() -> None:
             # Ensure windows are from trigger=0 time (no partial trigger pulls).
             return any(trig[i] != 0 for i in range(start_i, end_i))
 
-        if args.neg_strategy == "far":
+        def far_candidates() -> list[int]:
             # Candidate window end indices for negatives. Window is [end-window, end)
-            candidates: list[int] = []
+            candidates: list[tuple[float, int]] = []  # (motion_score, end_i)
             for end_i in range(window_samples, n):
                 if avoid[end_i]:
                     continue
@@ -501,19 +612,43 @@ def main() -> None:
                     continue
                 if window_has_trigger(start_i, end_i):
                     continue
-                candidates.append(end_i)
+                mscore = motion_score_window(ax, ay, az, gx, gy, gz, start_i, end_i)
+                candidates.append((mscore, end_i))
 
-            neg_target = min(len(candidates), len(pos_windows) * max(0, args.neg_mult))
-            neg_ends = rng.sample(candidates, k=neg_target) if neg_target else []
-        else:
+            if args.neg_min_motion_quantile and candidates:
+                q = max(0.0, min(1.0, float(args.neg_min_motion_quantile)))
+                scores = sorted(m for m, _ in candidates)
+                kq = int(math.floor(q * (len(scores) - 1)))
+                thr = scores[kq]
+                candidates = [(m, e) for (m, e) in candidates if m >= thr]
+
+            if pos_lo is not None and pos_hi is not None:
+                candidates = [(m, e) for (m, e) in candidates if pos_lo <= m <= pos_hi]
+
+            return [e for _m, e in candidates]
+
+        def sample_far(k_total: int) -> list[int]:
+            cand_ends = far_candidates()
+            if k_total <= 0 or not cand_ends:
+                return []
+            if args.neg_with_replacement:
+                overs = rng.choices(cand_ends, k=k_total * 3)
+                return sample_unique_with_min_separation(rng, overs, ts, k_total, args.neg_min_sep_ms)
+            k_total = min(len(cand_ends), k_total)
+            return sample_unique_with_min_separation(rng, cand_ends, ts, k_total, args.neg_min_sep_ms)
+
+        def sample_near(k_per_shot: int) -> list[int]:
             # Near negatives: for each positive window, sample negative windows that end shortly
             # BEFORE the positive window starts, to keep posture/context similar.
             # positive window: [pos_start, pos_end)
             # negative end is in [pos_start - neg_near_max_ms, pos_start - neg_near_min_ms]
+            if k_per_shot <= 0:
+                return []
+            out: list[int] = []
             min_ms = max(0, args.neg_near_min_ms)
             max_ms = max(min_ms, args.neg_near_max_ms)
 
-            for shot_idx, pos_start_i, _pos_end_i in pos_windows:
+            for _shot_num, _edge_i, pos_start_i, _pos_end_i in pos_windows:
                 pos_start_t = ts[pos_start_i]
                 lo_t = pos_start_t - max_ms
                 hi_t = pos_start_t - min_ms
@@ -524,7 +659,7 @@ def main() -> None:
                 if hi_i - lo_i <= 0:
                     continue
                 # Candidate ends in this band.
-                band = []
+                band: list[tuple[float, int]] = []
                 for end_i in range(max(window_samples, lo_i), hi_i):
                     if avoid[end_i]:
                         continue
@@ -533,16 +668,60 @@ def main() -> None:
                         continue
                     if window_has_trigger(start_i, end_i):
                         continue
-                    band.append(end_i)
+                    mscore = motion_score_window(ax, ay, az, gx, gy, gz, start_i, end_i)
+                    band.append((mscore, end_i))
                 if not band:
                     continue
-                k = max(0, args.neg_mult)
-                if k == 0:
-                    continue
-                if k >= len(band):
-                    neg_ends.extend(band)
+                if args.neg_min_motion_quantile:
+                    q = max(0.0, min(1.0, float(args.neg_min_motion_quantile)))
+                    scores = sorted(m for m, _ in band)
+                    kq = int(math.floor(q * (len(scores) - 1)))
+                    thr = scores[kq]
+                    band = [(m, e) for (m, e) in band if m >= thr]
+                    if not band:
+                        continue
+                if pos_lo is not None and pos_hi is not None:
+                    band = [(m, e) for (m, e) in band if pos_lo <= m <= pos_hi]
+                    if not band:
+                        continue
+
+                ends = [e for _m, e in band]
+                if args.neg_with_replacement:
+                    overs = rng.choices(ends, k=k_per_shot * 3)
+                    out.extend(sample_unique_with_min_separation(rng, overs, ts, k_per_shot, args.neg_min_sep_ms))
+                elif k_per_shot >= len(ends):
+                    out.extend(ends)
                 else:
-                    neg_ends.extend(rng.sample(band, k=k))
+                    out.extend(sample_unique_with_min_separation(rng, ends, ts, k_per_shot, args.neg_min_sep_ms))
+            return out
+
+        if args.neg_strategy == "far":
+            # Candidate window end indices for negatives. Window is [end-window, end)
+            neg_target = len(pos_windows) * max(0, args.neg_mult)
+            neg_ends = sample_far(neg_target)
+        elif args.neg_strategy == "near":
+            neg_ends = sample_near(max(0, args.neg_mult))
+        else:  # mixed
+            frac = max(0.0, min(1.0, float(args.neg_mixed_near_frac)))
+            near_k = int(round(max(0, args.neg_mult) * frac))
+            far_total = len(pos_windows) * max(0, args.neg_mult)
+            neg_ends = sample_near(near_k)
+            remaining = max(0, far_total - len(neg_ends))
+            neg_ends.extend(sample_far(remaining))
+            # Final de-dup + separation pass across combined strategies.
+            neg_ends = sample_unique_with_min_separation(rng, neg_ends, ts, far_total, args.neg_min_sep_ms)
+
+        def nearest_shot_num(t_ms: int) -> int:
+            if not shot_ts:
+                return -1
+            j = bisect.bisect_left(shot_ts, t_ms)
+            if j <= 0:
+                return 0
+            if j >= len(shot_ts):
+                return len(shot_ts) - 1
+            before = shot_ts[j - 1]
+            after = shot_ts[j]
+            return j - 1 if (t_ms - before) <= (after - t_ms) else j
 
         # Write binary windows + labels + index.
         windows_path = train_dir / "windows_i16le.bin"
@@ -570,6 +749,9 @@ def main() -> None:
                 fieldnames=[
                     "row",
                     "label",
+                    "shot_num",
+                    "shot_timestamp_ms",
+                    "distance_to_shot_ms",
                     "event_timestamp_ms",
                     "window_start_ms",
                     "window_end_ms",
@@ -580,13 +762,17 @@ def main() -> None:
 
             row_num = 0
             # Positives first
-            for shot_idx, start_i, end_i in pos_windows:
+            for shot_num, edge_i, start_i, end_i in pos_windows:
                 write_window(wf, start_i, end_i)
                 lf.write(bytes((1,)))
+                t_event = ts[edge_i]
                 rec = {
                     "row": row_num,
                     "label": 1,
-                    "event_timestamp_ms": ts[shot_idx],
+                    "shot_num": shot_num,
+                    "shot_timestamp_ms": t_event,
+                    "distance_to_shot_ms": 0,
+                    "event_timestamp_ms": t_event,
                     "window_start_ms": ts[start_i],
                     "window_end_ms": ts[end_i - 1],
                     "source": "pos",
@@ -600,10 +786,16 @@ def main() -> None:
                 start_i = end_i - window_samples
                 write_window(wf, start_i, end_i)
                 lf.write(bytes((0,)))
+                t_event = ts[end_i]
+                s_num = nearest_shot_num(t_event)
+                s_ts = shot_ts[s_num] if 0 <= s_num < len(shot_ts) else 0
                 rec = {
                     "row": row_num,
                     "label": 0,
-                    "event_timestamp_ms": ts[end_i],
+                    "shot_num": s_num,
+                    "shot_timestamp_ms": s_ts,
+                    "distance_to_shot_ms": int(t_event - s_ts) if s_ts else 0,
+                    "event_timestamp_ms": t_event,
                     "window_start_ms": ts[start_i],
                     "window_end_ms": ts[end_i - 1],
                     "source": "neg",
@@ -626,9 +818,16 @@ def main() -> None:
             "negatives": len(neg_ends),
             "neg_mult": args.neg_mult,
             "neg_strategy": args.neg_strategy,
+            "neg_mixed_near_frac": args.neg_mixed_near_frac,
+            "neg_min_motion_quantile": args.neg_min_motion_quantile,
+            "neg_match_pos_motion": args.neg_match_pos_motion,
+            "neg_pos_motion_q": args.neg_pos_motion_q,
+            "neg_min_sep_ms": args.neg_min_sep_ms,
+            "neg_with_replacement": args.neg_with_replacement,
             "neg_near_min_ms": args.neg_near_min_ms,
             "neg_near_max_ms": args.neg_near_max_ms,
             "neg_avoid_post_ms": args.neg_avoid_post_ms,
+            "neg_avoid_edges": args.neg_avoid_edges,
             "format": {
                 "windows_i16le.bin": "concatenated windows; each window is window_samples rows of 6 int16 (ax,ay,az,gx,gy,gz)",
                 "labels_u8.bin": "one byte per window (0/1), in the same order as windows",

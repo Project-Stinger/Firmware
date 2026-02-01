@@ -53,6 +53,7 @@
 #include "standby.h"
 #include "tournament.h"
 #include "mlLog.h"
+#include "mlInfer.h"
 #include "utils/filters.h"
 #include "utils/fixedPointInt.h"
 #include "utils/quaternion.h"

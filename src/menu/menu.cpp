@@ -201,7 +201,9 @@ void initMenu() {
 #if HW_VERSION == 1
 		->addChild(new MenuItem(&idleEnabled, false, EEPROM_POS_IDLE_ENABLED, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
 #elif HW_VERSION == 2
-		->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 7, (const char *)idleStrings, 9, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+		->addChild(new MenuItem(&idleEnabled, 9, EEPROM_POS_IDLE_ENABLED, 9, (const char *)idleStrings, 9, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+		->addChild(new MenuItem(&mlIdleMode, 1, EEPROM_POS_ML_IDLE_MODE, 1, (const char *)mlIdleModeStrings, 9, true, "mlIdleMode", "ML Idle Mode", "Binary = idle on/off. Dynamic = scale RPM with model probability."))
+		->addChild(new MenuItem(VariableType::U8, &mlThresholdPct, 50, 1, 5, 95, 1, 0, EEPROM_POS_ML_THRESHOLD_PCT, true, "mlThresh", "ML Threshold %", "Probability threshold. Lower = earlier/more aggressive idling."))
 #endif
 #ifdef USE_TOF
 		->addChild(new MenuItem(&idleOnlyWithMag, true, EEPROM_POS_IDLE_ONLY_WITH_MAG, false, "idleOnlyWithMag", HW_VERSION == 2 ? "Idle only with mag" : "No mag no idle", "Preview the idling RPM in the menu"))
@@ -219,7 +221,7 @@ void initMenu() {
 		->addChild(motorExpertMenu);
 	MenuItem *motorExpertPage2 = new MenuItem(MenuItemType::SUBMENU, "motorExpertPage2", "Next Page");
 	motorExpertMenu
-		->addChild(new MenuItem(VariableType::U8, &minThrottle, 40, 2, 0, 200, 20, 1, EEPROM_POS_MIN_THROTTLE, false, "minThrottle", "Min Throttle %", "Minimum throttle for the motors to run at (unless they are off), e.g. to overcome glitching at low throttle. Overrides whatever the PID says."))
+		->addChild(new MenuItem(VariableType::U8, &minThrottle, 14, 2, 0, 200, 20, 1, EEPROM_POS_MIN_THROTTLE, false, "minThrottle", "Min Throttle %", "Minimum throttle for the motors to run at (unless they are off), e.g. to overcome glitching at low throttle. Overrides whatever the PID says."))
 		->addChild(new MenuItem(VariableType::I16, &pGainNice, DEFAULT_PID_P, 1, 0, 500, 1, 0, EEPROM_POS_PID_P, false, "pGain", "P Gain", "Proportional Gain for the PID controller, higher values make the system react faster but can lead to oscillations and overshoot"))
 		->addChild(new MenuItem(VariableType::I16, &iGainNice, DEFAULT_PID_I, 1, 0, 500, 1, 0, EEPROM_POS_PID_I, false, "iGain", "I Gain", "Integral Gain for the PID controller, higher values make the system react faster to long term errors and new setpoints but can lead to overshoot and low frequency oscillations"))
 		->addChild(new MenuItem(VariableType::I16, &dGainNice, DEFAULT_PID_D, 1, 0, 500, 1, 0, EEPROM_POS_PID_D, false, "dGain", "D Gain", "Derivative Gain for the PID controller, higher values can reduce overshoot and oscillations but can lead to noise amplification, i.e. hot motors, and instability"))
