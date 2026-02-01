@@ -573,8 +573,12 @@ export function trainPipeline(logBytes, onLog = () => {}) {
 
   onLog("Evaluating (held-out split)...");
   const metrics = evalHeldOut(F_lr_raw, nfLR, F_mlp_raw, nfMLP, ds.y, ds.totalWindows, 0.25, 1337);
-  onLog(`LR metrics (test): P=${(metrics.lr.precision * 100).toFixed(1)} R=${(metrics.lr.recall * 100).toFixed(1)} F1=${(metrics.lr.f1 * 100).toFixed(1)}`);
-  onLog(`MLP metrics (test): P=${(metrics.mlp.precision * 100).toFixed(1)} R=${(metrics.mlp.recall * 100).toFixed(1)} F1=${(metrics.mlp.f1 * 100).toFixed(1)}`);
+  if (!metrics) {
+    onLog("NOTE: Not enough data for a reliable held-out metrics split (record more shots + negatives).");
+  } else {
+    onLog(`LR metrics (test): P=${(metrics.lr.precision * 100).toFixed(1)} R=${(metrics.lr.recall * 100).toFixed(1)} F1=${(metrics.lr.f1 * 100).toFixed(1)}`);
+    onLog(`MLP metrics (test): P=${(metrics.mlp.precision * 100).toFixed(1)} R=${(metrics.mlp.recall * 100).toFixed(1)} F1=${(metrics.mlp.f1 * 100).toFixed(1)}`);
+  }
 
   onLog("Training LogReg (final, all data)...");
   const scalerLR = fitScaler(F_lr_raw, ds.totalWindows, nfLR);
@@ -606,6 +610,141 @@ export function trainPipeline(logBytes, onLog = () => {}) {
     shotsAll: risingAll.length, shotsAccepted: accepted.length,
     posWindows: ds.posCount, negWindows: ds.negCount,
   }, metrics, lrBlob, mlpBlob, shotPlots };
+}
+
+// ── Held-out metrics (quick self-check) ─────────────────────────────────────
+
+function stratifiedSplit(y, nRows, testSize, rng) {
+  const pos = [], neg = [];
+  for (let i = 0; i < nRows; i++) (y[i] ? pos : neg).push(i);
+  if (pos.length < 2 || neg.length < 2) return null;
+  shuffle(pos, rng); shuffle(neg, rng);
+  let tp = Math.max(1, Math.round(pos.length * testSize));
+  let tn = Math.max(1, Math.round(neg.length * testSize));
+  tp = Math.min(tp, pos.length - 1);
+  tn = Math.min(tn, neg.length - 1);
+  const testIdx = pos.slice(0, tp).concat(neg.slice(0, tn));
+  const trainIdx = pos.slice(tp).concat(neg.slice(tn));
+  shuffle(testIdx, rng); shuffle(trainIdx, rng);
+  return { trainIdx, testIdx, posTest: tp, negTest: tn, posTrain: pos.length - tp, negTrain: neg.length - tn };
+}
+
+function gatherRows(F, idxs, nFeat) {
+  const out = new Float32Array(idxs.length * nFeat);
+  for (let r = 0; r < idxs.length; r++) {
+    const i = idxs[r];
+    out.set(F.subarray(i * nFeat, i * nFeat + nFeat), r * nFeat);
+  }
+  return out;
+}
+
+function gatherLabels(y, idxs) {
+  const out = new Uint8Array(idxs.length);
+  for (let i = 0; i < idxs.length; i++) out[i] = y[idxs[i]];
+  return out;
+}
+
+function predictLRScaledRow(Fs, row, nFeat, coef, intercept) {
+  let z = intercept;
+  const off = row * nFeat;
+  for (let j = 0; j < nFeat; j++) z += Fs[off + j] * coef[j];
+  return sigmoid(z);
+}
+
+function predictMLPScaledRow(Fs, row, nFeat, w1, b1, w2, b2, w3, b3Val, h1Size, h2Size) {
+  const xOff = row * nFeat;
+  const h1 = new Float32Array(h1Size);
+  for (let j = 0; j < h1Size; j++) {
+    let sum = b1[j];
+    const wOff = j * nFeat;
+    for (let k = 0; k < nFeat; k++) sum += w1[wOff + k] * Fs[xOff + k];
+    h1[j] = sum > 0 ? sum : 0;
+  }
+  const h2 = new Float32Array(h2Size);
+  for (let j = 0; j < h2Size; j++) {
+    let sum = b2[j];
+    const wOff = j * h1Size;
+    for (let k = 0; k < h1Size; k++) sum += w2[wOff + k] * h1[k];
+    h2[j] = sum > 0 ? sum : 0;
+  }
+  let z = b3Val;
+  for (let k = 0; k < h2Size; k++) z += w3[k] * h2[k];
+  return sigmoid(z);
+}
+
+function confusionFromProbs(yTrue, probs, thr) {
+  let tp = 0, tn = 0, fp = 0, fn = 0;
+  for (let i = 0; i < yTrue.length; i++) {
+    const pred = probs[i] >= thr ? 1 : 0;
+    const yt = yTrue[i] ? 1 : 0;
+    if (pred === 1 && yt === 1) tp++;
+    else if (pred === 1 && yt === 0) fp++;
+    else if (pred === 0 && yt === 1) fn++;
+    else tn++;
+  }
+  return { tp, tn, fp, fn };
+}
+
+function metricsFromCm(cm) {
+  const { tp, tn, fp, fn } = cm;
+  const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
+  const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
+  const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
+  const acc = (tp + tn) / Math.max(1, tp + tn + fp + fn);
+  return { precision, recall, f1, acc };
+}
+
+function bestF1Threshold(yTrue, probs) {
+  let bestThr = 0.5, bestF1 = -1;
+  for (let ti = 0; ti <= 100; ti++) {
+    const thr = ti / 100;
+    const cm = confusionFromProbs(yTrue, probs, thr);
+    const { f1 } = metricsFromCm(cm);
+    if (f1 > bestF1) { bestF1 = f1; bestThr = thr; }
+  }
+  return { bestThr, bestF1 };
+}
+
+function evalHeldOut(F_lr_raw, nfLR, F_mlp_raw, nfMLP, y, nRows, testSize, seed) {
+  const rng = makeRng(seed);
+  const split = stratifiedSplit(y, nRows, testSize, rng);
+  if (!split) return null;
+
+  const yTrain = gatherLabels(y, split.trainIdx);
+  const yTest = gatherLabels(y, split.testIdx);
+
+  // LR
+  const lrTrainRaw = gatherRows(F_lr_raw, split.trainIdx, nfLR);
+  const lrTestRaw = gatherRows(F_lr_raw, split.testIdx, nfLR);
+  const scalerLR = fitScaler(lrTrainRaw, split.trainIdx.length, nfLR);
+  const lrTrain = applyScaler(lrTrainRaw, split.trainIdx.length, nfLR, scalerLR.mean, scalerLR.scale);
+  const lrTest = applyScaler(lrTestRaw, split.testIdx.length, nfLR, scalerLR.mean, scalerLR.scale);
+  const lr = trainLogReg(lrTrain, yTrain, split.trainIdx.length, nfLR);
+  const probsLR = new Float32Array(split.testIdx.length);
+  for (let i = 0; i < probsLR.length; i++) probsLR[i] = predictLRScaledRow(lrTest, i, nfLR, lr.coef, lr.intercept);
+  const cmLR = confusionFromProbs(yTest, probsLR, 0.5);
+  const mLR = metricsFromCm(cmLR);
+  const bestLR = bestF1Threshold(yTest, probsLR);
+
+  // MLP
+  const mlpTrainRaw = gatherRows(F_mlp_raw, split.trainIdx, nfMLP);
+  const mlpTestRaw = gatherRows(F_mlp_raw, split.testIdx, nfMLP);
+  const scalerMLP = fitScaler(mlpTrainRaw, split.trainIdx.length, nfMLP);
+  const mlpTrain = applyScaler(mlpTrainRaw, split.trainIdx.length, nfMLP, scalerMLP.mean, scalerMLP.scale);
+  const mlpTest = applyScaler(mlpTestRaw, split.testIdx.length, nfMLP, scalerMLP.mean, scalerMLP.scale);
+  const mlp = trainMLP(mlpTrain, yTrain, split.trainIdx.length, nfMLP);
+  const probsMLP = new Float32Array(split.testIdx.length);
+  for (let i = 0; i < probsMLP.length; i++)
+    probsMLP[i] = predictMLPScaledRow(mlpTest, i, nfMLP, mlp.w1, mlp.b1, mlp.w2, mlp.b2, mlp.w3, mlp.b3, 64, 32);
+  const cmMLP = confusionFromProbs(yTest, probsMLP, 0.5);
+  const mMLP = metricsFromCm(cmMLP);
+  const bestMLP = bestF1Threshold(yTest, probsMLP);
+
+  return {
+    split: { testSize, seed, ...split, testN: split.testIdx.length, trainN: split.trainIdx.length },
+    lr: { threshold: 0.5, cm: cmLR, ...mLR, bestThreshold: bestLR.bestThr, bestF1: bestLR.bestF1 },
+    mlp: { threshold: 0.5, cm: cmMLP, ...mMLP, bestThreshold: bestMLP.bestThr, bestF1: bestMLP.bestF1 },
+  };
 }
 
 // ── Per-shot plot data ──────────────────────────────────────────────────────

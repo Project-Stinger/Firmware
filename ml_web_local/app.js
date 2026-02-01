@@ -10,6 +10,7 @@ const btnDownloadTrace = document.getElementById("btnDownloadTrace");
 const btnDownloadLog = document.getElementById("btnDownloadLog");
 const resultsEl = document.getElementById("results");
 const summaryEl = document.getElementById("summary");
+const metricsEl = document.getElementById("metrics");
 const shotGridEl = document.getElementById("shotGrid");
 const btnLoadModel = document.getElementById("btnLoadModel");
 const btnDownloadModels = document.getElementById("btnDownloadModels");
@@ -358,6 +359,139 @@ function drawShotPlot(canvas, shot) {
 
 // ── Results display ─────────────────────────────────────────────────────────
 
+function fmtPct(x) { return `${(x * 100).toFixed(1)}%`; }
+
+function drawConfusionMatrix(canvas, cm) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = 520, H = 240;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.classList.add("cmCanvas");
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = "#0b0e14";
+  ctx.fillRect(0, 0, W, H);
+
+  const pad = 18;
+  const gridX0 = pad + 70;
+  const gridY0 = pad + 30;
+  const cellW = 170;
+  const cellH = 80;
+
+  const tn = cm.tn ?? 0, fp = cm.fp ?? 0, fn = cm.fn ?? 0, tp = cm.tp ?? 0;
+  const vals = [tn, fp, fn, tp];
+  const vmax = Math.max(1, ...vals);
+
+  function cellColor(v) {
+    const a = Math.min(1, v / vmax);
+    return `rgba(56,189,248,${0.12 + 0.55 * a})`;
+  }
+
+  // Labels
+  ctx.fillStyle = "#9aa4b2";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("Confusion matrix (test)", pad, pad + 4);
+
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText("Pred 0", gridX0 + 10, gridY0 - 10);
+  ctx.fillText("Pred 1", gridX0 + cellW + 10, gridY0 - 10);
+  ctx.save();
+  ctx.translate(gridX0 - 40, gridY0 + cellH);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText("True 0", 0, 0);
+  ctx.restore();
+  ctx.save();
+  ctx.translate(gridX0 - 40, gridY0 + cellH + cellH);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText("True 1", 0, 0);
+  ctx.restore();
+
+  // Cells: [ [tn, fp], [fn, tp] ]
+  const cells = [
+    { x: gridX0, y: gridY0, v: tn, label: "TN" },
+    { x: gridX0 + cellW, y: gridY0, v: fp, label: "FP" },
+    { x: gridX0, y: gridY0 + cellH, v: fn, label: "FN" },
+    { x: gridX0 + cellW, y: gridY0 + cellH, v: tp, label: "TP" },
+  ];
+  ctx.textAlign = "left";
+  for (const c of cells) {
+    ctx.fillStyle = cellColor(c.v);
+    ctx.fillRect(c.x, c.y, cellW - 10, cellH - 10);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(c.x, c.y, cellW - 10, cellH - 10);
+    ctx.fillStyle = "rgba(229,231,235,0.95)";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText(String(c.v), c.x + 12, c.y + 34);
+    ctx.fillStyle = "#9aa4b2";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText(c.label, c.x + 12, c.y + 56);
+  }
+}
+
+function renderMetrics(metrics) {
+  metricsEl.replaceChildren();
+  if (!metrics?.lr || !metrics?.mlp) {
+    const div = document.createElement("div");
+    div.className = "muted";
+    div.textContent = "Not enough data to compute a reliable held-out metric check yet. Record a longer session with more shots and more non-shooting aiming (negatives).";
+    metricsEl.appendChild(div);
+    return;
+  }
+
+  const mkCard = (title, subtitle, m) => {
+    const card = document.createElement("div");
+    card.className = "metricCard";
+
+    const head = document.createElement("div");
+    head.className = "metricHead";
+    const t = document.createElement("div");
+    t.className = "metricTitle";
+    t.textContent = title;
+    const sub = document.createElement("div");
+    sub.className = "metricSub";
+    sub.textContent = subtitle;
+    head.appendChild(t);
+    head.appendChild(sub);
+    card.appendChild(head);
+
+    const row = document.createElement("div");
+    row.className = "metricRow";
+    const pills = [
+      `Precision ${fmtPct(m.precision)}`,
+      `Recall ${fmtPct(m.recall)}`,
+      `F1 ${fmtPct(m.f1)}`,
+      `Acc ${fmtPct(m.acc)}`,
+      `Thr ${(m.threshold ?? 0.5).toFixed(2)} (best ${(m.bestThreshold ?? 0.5).toFixed(2)})`,
+    ];
+    for (const txt of pills) {
+      const p = document.createElement("span");
+      p.className = "metricPill";
+      p.textContent = txt;
+      row.appendChild(p);
+    }
+    card.appendChild(row);
+
+    const canvas = document.createElement("canvas");
+    drawConfusionMatrix(canvas, m.cm ?? { tp: 0, tn: 0, fp: 0, fn: 0 });
+    card.appendChild(canvas);
+
+    return card;
+  };
+
+  metricsEl.appendChild(mkCard("LR", "18 features · fast & stable", metrics.lr));
+  metricsEl.appendChild(mkCard("MLP", "30 features · more expressive", metrics.mlp));
+
+  const help = document.createElement("div");
+  help.className = "callout";
+  const b = document.createElement("b");
+  b.textContent = "How to tell it's good:";
+  help.appendChild(b);
+  help.appendChild(document.createElement("br"));
+  help.appendChild(document.createTextNode("You want high precision (few false spin-ups) and high recall (early spin-ups before real shots). If either model looks bad, record longer with more non-shooting aiming/movement (negatives)."));
+  metricsEl.appendChild(help);
+}
+
 function showResults(result) {
   resultsEl.classList.remove("hidden");
   const s = result.summary;
@@ -375,14 +509,17 @@ function showResults(result) {
     summaryEl.appendChild(div);
   }
 
+  renderMetrics(result.metrics);
+
   shotGridEl.replaceChildren();
-  if (result.shotPlots.length === 0) {
+  const shots = (result.shotPlots ?? []).slice(0, 2);
+  if (shots.length === 0) {
     const empty = document.createElement("div");
     empty.className = "muted";
-    empty.textContent = "No shots had strong enough predictions to display. The model may need more training data.";
+    empty.textContent = "No good shots found to display (no clear low→high prediction). Record a longer session with more shots and more non-shooting aiming.";
     shotGridEl.appendChild(empty);
   }
-  for (const shot of result.shotPlots) {
+  for (const shot of shots) {
     const div = document.createElement("div"); div.className = "shot";
     const canvas = document.createElement("canvas");
     div.appendChild(canvas); shotGridEl.appendChild(div);
@@ -434,6 +571,7 @@ btnReady.addEventListener("click", async () => {
     showResults(result);
     btnLoadModel.disabled = false; btnDownloadModels.disabled = false;
     btnDownloadLog.disabled = false; btnReady.disabled = false;
+    resultsEl.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     setSpinner(false); log("ERROR: " + (e?.message ?? String(e)));
     const idx = Object.keys(status).length ? Math.max(...Object.keys(status).map((x) => parseInt(x, 10))) : 0;

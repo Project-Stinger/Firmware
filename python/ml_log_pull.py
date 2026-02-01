@@ -114,6 +114,7 @@ def main() -> None:
             if trailer:
                 print(trailer.decode(errors="replace"))
         except Exception:
+            # Trailer is optional; ignore any errors while attempting to read it.
             pass
 
     print(f"Wrote {size} bytes -> {out_path}")

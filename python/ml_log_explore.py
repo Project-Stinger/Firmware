@@ -167,6 +167,7 @@ def safe_unlink(path: Path) -> None:
     try:
         path.unlink()
     except FileNotFoundError:
+        # Best-effort cleanup: already removed (or never existed).
         pass
 
 
@@ -181,6 +182,7 @@ def rm_tree(path: Path) -> None:
     try:
         path.rmdir()
     except OSError:
+        # Best-effort cleanup: ignore errors if the directory cannot be removed.
         pass
 
 

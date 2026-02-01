@@ -486,7 +486,15 @@ void mlLogSlowLoop() {
 		goto flush_logic;
 	}
 
+	// Important: do not unconditionally drain the serial RX buffer.
+	// Other debug features (e.g. USE_BLACKBOX "press any key") may also be watching Serial.
+	// We therefore only consume bytes once we detect an ML command prefix.
 	while (Serial.available()) {
+		if (cmdLen == 0) {
+			const int pk = Serial.peek();
+			if (pk < 0) break;
+			if ((char)pk != 'M') break; // leave bytes for other consumers
+		}
 		const char c = (char)Serial.read();
 		if (c == '\n' || c == '\r') {
 			cmdBuf[cmdLen] = '\0';

@@ -32,6 +32,9 @@ These are set via `platformio.ini` `build_flags` (some are currently commented o
 
 - `src/main.cpp`: entrypoint; dual-core scheduling and high/low priority loops.
 - `src/operationSm.cpp` / `src/operationSm.h`: the **operation state machine** (rev/fire/ramp logic).
+- (V2) `src/mlLog.cpp` / `src/mlLog.h`: IMU + trigger logging to LittleFS + serial export + model upload protocol.
+- (V2) `src/mlInfer.cpp` / `src/mlInfer.h`: on-device inference (LR + MLP), cached probability, user model load.
+- (V2) `src/usbSession.cpp` / `src/usbSession.h`: core-0 USB state sampler (mounted/DTR) exposed as atomics for core 1.
 - `src/pid.cpp` / `src/pid.h`: flywheel RPM PID loop and (optional) blackbox capture.
 - `src/drivers/*`: hardware drivers (ESC, display, joystick, trigger, battery, ToF, gyro, speaker, LEDs, SPI helpers).
 - `src/menu/*`: menu tree + `MenuItem` system; settings persistence (EEPROM-backed).
@@ -64,6 +67,15 @@ This separation is visible in `src/main.cpp`:
 - `#define PID_RATE 3200`
 
 Core 1 runs a “tick” roughly every `1e6 / PID_RATE` microseconds and calls the time-critical subsystem functions. If you add work to `loop1()` (or to anything it calls), you are trading away real-time margin.
+
+### V2 ML cross-core split (why it exists)
+
+RP2040 is Cortex-M0+ (no HW float), and inference/featurization is expensive. The ML design keeps timing deterministic:
+
+- **Core 1**: samples IMU, does cheap decimation, pushes into ring buffers / windows.
+- **Core 0**: performs flash I/O (LittleFS flush/export) and runs the heavy inference (`mlInferSlowLoop`) and caches a probability value.
+
+Core 1 should never call TinyUSB internals directly; `usbSessionLoop0()` samples USB mounted/DTR on core 0 and publishes simple flags.
 
 ## Boot + initialization flow
 
@@ -124,6 +136,12 @@ Key cases:
 - tournament UI logic (`tournamentLoop()`)
 - (V2) LED + speaker loop if not running on fast core
 
+On V2, core 0 also runs:
+
+- `usbSessionLoop0()` (samples USB mounted/DTR and publishes `usbCdcActive()`)
+- `mlLogSlowLoop()` (serial protocol + deferred LittleFS flush)
+- `mlInferSlowLoop()` (ML inference, cached probability updates)
+
 ## Operation state machine (`runOperationSm`)
 
 The core behavior is governed by `operationState` (`src/operationSm.h`):
@@ -140,6 +158,7 @@ The core behavior is governed by `operationState` (`src/operationSm.h`):
 - `STATE_JOYSTICK_CAL`: interactive joystick calibration.
 - (V2) `STATE_FALL_DETECTED`: safety lockout after free-fall detection.
 - `STATE_BOOT_SELECT`: boot selection carousel UI (trigger to select).
+- (V2) `STATE_USB`: USB service mode (safe state for MLDUMP / model upload). Entered when `usbCdcActive()` is true.
 
 ### Safety and “disable” flags
 
@@ -282,4 +301,3 @@ If you want to understand behavior end-to-end:
 4. `src/drivers/esc.cpp` — how DShot + telemetry are sent/received.
 5. `src/pusher.cpp` + `src/drivers/tof.cpp` — firing mechanics and dart accounting.
 6. `src/menu/menu.cpp` + `src/eepromImpl.cpp` — settings model and persistence.
-
