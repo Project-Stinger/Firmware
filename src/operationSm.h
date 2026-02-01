@@ -10,7 +10,7 @@ extern bool idleOnlyWithMag;
 extern bool idleEnabled;
 #elif HW_VERSION == 2
 extern u8 idleEnabled;
-const char idleStrings[8][9] = {
+const char idleStrings[10][9] = {
 	"Off",
 	"Always",
 	"+/- 10°",
@@ -19,6 +19,14 @@ const char idleStrings[8][9] = {
 	"+/- 25°",
 	"+/- 30°",
 	"+/- 35°",
+	"ML:LR",
+	"ML:MLP",
+};
+extern u8 mlIdleMode;
+extern u8 mlThresholdPct;
+const char mlIdleModeStrings[2][9] = {
+	"Binary",
+	"Dynamic",
 };
 extern u8 maxFireAngleSetting;
 const char fireAngleStrings[6][9] = {
@@ -30,6 +38,9 @@ const char fireAngleStrings[6][9] = {
 	"No limit",
 };
 extern fix32 actualDps;
+
+// UI helper: returns whether an ML confidence value is available and writes 0–100.
+bool mlIdleGetConfidencePct(u8 *outPct);
 #endif
 extern bool bootUnlockNeeded;
 extern u16 rampdownTime, rampupTimeout;
