@@ -83,15 +83,22 @@ export function extractDataset(data, accepted, opts = {}) {
   } = opts;
   const { ts, ax, ay, az, gx, gy, gz, trig, n } = data;
 
-  // Estimate sample interval
+  // Keep sample counts consistent with firmware:
+  // - Firmware window is exactly 50 samples (500ms @ 100Hz)
+  // - Lead is exactly 100ms (10 samples @ 100Hz)
+  //
+  // We still estimate dt from timestamps for sanity checks / logging, but we do not
+  // let jitter change the sample counts (otherwise the MLMD header won't match
+  // the on-device expectations).
   let dtSum = 0, dtCount = 0;
   for (let i = 1; i < Math.min(n, 500); i++) {
     const d = ts[i] - ts[i - 1];
     if (d > 0 && d < 100) { dtSum += d; dtCount++; }
   }
-  const dtMed = dtCount > 0 ? dtSum / dtCount : 10;
-  const leadSamples = Math.max(1, Math.round(leadMs / dtMed));
-  const ws = Math.max(1, Math.round(windowMs / dtMed));
+  const dtEstMs = dtCount > 0 ? dtSum / dtCount : 10;
+  const sampleMs = windowMs / windowSamples; // nominal 10ms
+  const leadSamples = Math.max(1, Math.round(leadMs / sampleMs));
+  const ws = windowSamples;
 
   // Positive windows: [edgeI - lead - ws, edgeI - lead)
   const posWindows = [];
@@ -118,14 +125,21 @@ export function extractDataset(data, accepted, opts = {}) {
     for (let j = lo; j < hi && j < n; j++) avoid[j] = 1;
   }
 
+  // Prefix sum for "does this whole window overlap an avoided region?"
+  const avoidPref = new Uint32Array(n + 1);
+  for (let i = 0; i < n; i++) avoidPref[i + 1] = avoidPref[i] + avoid[i];
+  function windowHasAvoid(startI, endI) {
+    return (avoidPref[endI] - avoidPref[startI]) !== 0;
+  }
+
   // Far negative candidates
   const rng = makeRng(seed);
   const negTarget = posWindows.length; // 1:1 ratio
   const candidates = [];
   for (let endI = ws; endI < n; endI++) {
-    if (avoid[endI]) continue;
     const startI = endI - ws;
     if (startI < 0) continue;
+    if (windowHasAvoid(startI, endI)) continue;
     let hasTrig = false;
     for (let j = startI; j < endI; j++) { if (trig[j]) { hasTrig = true; break; } }
     if (hasTrig) continue;
@@ -165,7 +179,16 @@ export function extractDataset(data, accepted, opts = {}) {
   for (const pw of posWindows) { writeWindow(wi, pw.startI); y[wi] = 1; wi++; }
   for (const endI of negEnds) { writeWindow(wi, endI - ws); y[wi] = 0; wi++; }
 
-  return { X, y, totalWindows, windowSamples: ws, channels: 6, posCount: posWindows.length, negCount: negEnds.length };
+  return {
+    X, y,
+    totalWindows,
+    windowSamples: ws,
+    leadSamples,
+    dtEstMs,
+    channels: 6,
+    posCount: posWindows.length,
+    negCount: negEnds.length,
+  };
 }
 
 // ── Featurization ───────────────────────────────────────────────────────────
@@ -454,6 +477,8 @@ function concatU8(arrays) {
 
 export function buildMlmdLR(windowSamples, scalerMean, scalerScale, coef, intercept) {
   const nFeat = coef.length;
+  if (windowSamples !== 50) throw new Error(`LR: windowSamples must be 50, got ${windowSamples}`);
+  if (nFeat !== 18) throw new Error(`LR: features must be 18, got ${nFeat}`);
   const payload = concatU8([
     f32LEBytes(scalerMean), f32LEBytes(scalerScale),
     f32LEBytes(coef), f32LEBytes(new Float32Array([intercept])),
@@ -470,6 +495,9 @@ export function buildMlmdLR(windowSamples, scalerMean, scalerScale, coef, interc
 }
 
 export function buildMlmdMLP(windowSamples, scalerMean, scalerScale, w1, b1, w2, b2, w3, b3Val, nFeat, h1Size, h2Size) {
+  if (windowSamples !== 50) throw new Error(`MLP: windowSamples must be 50, got ${windowSamples}`);
+  if (nFeat !== 30) throw new Error(`MLP: features must be 30, got ${nFeat}`);
+  if (h1Size !== 64 || h2Size !== 32) throw new Error(`MLP: hidden sizes must be 64,32; got ${h1Size},${h2Size}`);
   const payload = concatU8([
     f32LEBytes(scalerMean), f32LEBytes(scalerScale),
     f32LEBytes(w1), f32LEBytes(b1),
@@ -531,27 +559,32 @@ export function trainPipeline(logBytes, onLog = () => {}) {
   onLog("Extracting training windows...");
   const ds = extractDataset(data, accepted);
   onLog(`Dataset: ${ds.posCount} positive, ${ds.negCount} negative windows (${ds.windowSamples} samples each)`);
+  if (Math.abs(ds.dtEstMs - 10) > 2) onLog(`WARNING: estimated dt is ${ds.dtEstMs.toFixed(2)}ms (expected ~10ms). Training still uses fixed 50-sample windows.`);
 
   if (ds.posCount === 0 || ds.negCount === 0)
     throw new Error("Not enough training data. Need both positive and negative windows.");
 
-  onLog("Featurizing (summary) for LR...");
-  const { F: F_lr, nFeat: nfLR } = featurizeSummary(ds.X, ds.totalWindows, ds.windowSamples, ds.channels);
-  const scalerLR = fitScaler(F_lr, ds.totalWindows, nfLR);
-  const F_lr_s = applyScaler(F_lr, ds.totalWindows, nfLR, scalerLR.mean, scalerLR.scale);
+  // Featurize once (unscaled), then:
+  // 1) compute quick held-out metrics (train/test split)
+  // 2) train final models on ALL data for export/upload
+  onLog("Featurizing...");
+  const { F: F_lr_raw, nFeat: nfLR } = featurizeSummary(ds.X, ds.totalWindows, ds.windowSamples, ds.channels);
+  const { F: F_mlp_raw, nFeat: nfMLP } = featurizeRich(ds.X, ds.totalWindows, ds.windowSamples, ds.channels);
 
-  onLog("Training LogReg...");
+  onLog("Evaluating (held-out split)...");
+  const metrics = evalHeldOut(F_lr_raw, nfLR, F_mlp_raw, nfMLP, ds.y, ds.totalWindows, 0.25, 1337);
+  onLog(`LR metrics (test): P=${(metrics.lr.precision * 100).toFixed(1)} R=${(metrics.lr.recall * 100).toFixed(1)} F1=${(metrics.lr.f1 * 100).toFixed(1)}`);
+  onLog(`MLP metrics (test): P=${(metrics.mlp.precision * 100).toFixed(1)} R=${(metrics.mlp.recall * 100).toFixed(1)} F1=${(metrics.mlp.f1 * 100).toFixed(1)}`);
+
+  onLog("Training LogReg (final, all data)...");
+  const scalerLR = fitScaler(F_lr_raw, ds.totalWindows, nfLR);
+  const F_lr_s = applyScaler(F_lr_raw, ds.totalWindows, nfLR, scalerLR.mean, scalerLR.scale);
   const lr = trainLogReg(F_lr_s, ds.y, ds.totalWindows, nfLR);
-  onLog(`LR done: intercept=${lr.intercept.toFixed(4)}, coef[0]=${lr.coef[0].toFixed(4)}`);
 
-  onLog("Featurizing (rich) for MLP...");
-  const { F: F_mlp, nFeat: nfMLP } = featurizeRich(ds.X, ds.totalWindows, ds.windowSamples, ds.channels);
-  const scalerMLP = fitScaler(F_mlp, ds.totalWindows, nfMLP);
-  const F_mlp_s = applyScaler(F_mlp, ds.totalWindows, nfMLP, scalerMLP.mean, scalerMLP.scale);
-
-  onLog("Training MLP (64->32->1)...");
+  onLog("Training MLP (final, all data)...");
+  const scalerMLP = fitScaler(F_mlp_raw, ds.totalWindows, nfMLP);
+  const F_mlp_s = applyScaler(F_mlp_raw, ds.totalWindows, nfMLP, scalerMLP.mean, scalerMLP.scale);
   const mlp = trainMLP(F_mlp_s, ds.y, ds.totalWindows, nfMLP);
-  onLog(`MLP done: b3=${mlp.b3.toFixed(4)}, w1[0]=${mlp.w1[0].toFixed(4)}`);
 
   onLog("Building MLMD binaries...");
   const lrBlob = buildMlmdLR(ds.windowSamples, scalerLR.mean, scalerLR.scale, lr.coef, lr.intercept);
@@ -563,7 +596,7 @@ export function trainPipeline(logBytes, onLog = () => {}) {
   onLog(`MLP model: ${mlpBlob.length} bytes, CRC=${crc32(mlpBlob).toString(16)}`);
 
   onLog("Computing per-shot predictions...");
-  const shotPlots = computeShotPlots(data, accepted, ds.windowSamples,
+  const shotPlots = computeShotPlots(data, accepted, ds.windowSamples, ds.leadSamples,
     scalerLR, lr, nfLR, scalerMLP, mlp, nfMLP);
   onLog(`Generated ${shotPlots.length} shot plots`);
 
@@ -572,15 +605,15 @@ export function trainPipeline(logBytes, onLog = () => {}) {
     durationMs: data.n > 0 ? data.ts[data.n - 1] - data.ts[0] : 0,
     shotsAll: risingAll.length, shotsAccepted: accepted.length,
     posWindows: ds.posCount, negWindows: ds.negCount,
-  }, lrBlob, mlpBlob, shotPlots };
+  }, metrics, lrBlob, mlpBlob, shotPlots };
 }
 
 // ── Per-shot plot data ──────────────────────────────────────────────────────
 
-function computeShotPlots(data, accepted, windowSamples, scalerLR, lr, nfLR, scalerMLP, mlp, nfMLP) {
+function computeShotPlots(data, accepted, windowSamples, leadSamples, scalerLR, lr, nfLR, scalerMLP, mlp, nfMLP) {
   const { ts, ax, ay, az, gx, gy, gz } = data;
   const n = data.n;
-  const maxShots = 6;
+  const maxShots = 2;
 
   const scored = [];
   for (const trigI of accepted) {
@@ -597,10 +630,13 @@ function computeShotPlots(data, accepted, windowSamples, scalerLR, lr, nfLR, sca
       axW.push(ax[i]); ayW.push(ay[i]); azW.push(az[i]);
       gxW.push(gx[i]); gyW.push(gy[i]); gzW.push(gz[i]);
 
-      if (i < windowSamples) { probsLR.push(0); probsMLP.push(0); continue; }
+      // Align with training objective:
+      // probability at time t uses the window ending leadSamples earlier (i - leadSamples).
+      const endI = i - leadSamples;
+      if (endI < windowSamples) { probsLR.push(0); probsMLP.push(0); continue; }
       const win = new Float32Array(windowSamples * 6);
       for (let j = 0; j < windowSamples; j++) {
-        const si = i - windowSamples + j;
+        const si = endI - windowSamples + j;
         win[j * 6] = ax[si]; win[j * 6 + 1] = ay[si]; win[j * 6 + 2] = az[si];
         win[j * 6 + 3] = gx[si]; win[j * 6 + 4] = gy[si]; win[j * 6 + 5] = gz[si];
       }
@@ -611,12 +647,33 @@ function computeShotPlots(data, accepted, windowSamples, scalerLR, lr, nfLR, sca
         mlp.w1, mlp.b1, mlp.w2, mlp.b2, mlp.w3, mlp.b3, nfMLP, 64, 32));
     }
 
-    const score = Math.max(scoreSingle(xMs, probsLR), scoreSingle(xMs, probsMLP));
-    scored.push({ trigI, t0, xMs, probsLR, probsMLP, axW, ayW, azW, gxW, gyW, gzW, score });
+    const scoreLR = scoreSingle(xMs, probsLR);
+    const scoreMLP = scoreSingle(xMs, probsMLP);
+    const scoreBoth = Math.min(scoreLR, scoreMLP);
+    const scoreEither = Math.max(scoreLR, scoreMLP);
+    scored.push({ trigI, t0, xMs, probsLR, probsMLP, axW, ayW, azW, gxW, gyW, gzW, scoreLR, scoreMLP, scoreBoth, scoreEither });
   }
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, maxShots);
+  const byTrig = new Map();
+  function addUnique(list) {
+    for (const s of list) {
+      if (byTrig.has(s.trigI)) continue;
+      byTrig.set(s.trigI, s);
+      if (byTrig.size >= maxShots) break;
+    }
+  }
+
+  // Prefer examples where BOTH models show a clear low→high transition.
+  const bothGood = scored.filter((s) => s.scoreBoth > 0).sort((a, b) => b.scoreBoth - a.scoreBoth);
+  addUnique(bothGood);
+
+  // Fallback: if not enough, allow shots where at least one model is clear.
+  if (byTrig.size < maxShots) {
+    const eitherGood = scored.filter((s) => s.scoreEither > 0).sort((a, b) => b.scoreEither - a.scoreEither);
+    addUnique(eitherGood);
+  }
+
+  return Array.from(byTrig.values());
 }
 
 function scoreSingle(xMs, probs) {

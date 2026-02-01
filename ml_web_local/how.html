@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" />
+    <title>But How? — Stinger ML</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <a href="index.html" class="back">&larr; Back to personalization tool</a>
+
+      <header class="hero">
+        <h1>But How?</h1>
+        <p class="sub">
+          A deep dive into how Stinger's ML idle prediction works — what the models are, how they're trained,
+          and the design decisions behind them.
+        </p>
+      </header>
+
+      <!-- ───────── THE BIG PICTURE ───────── -->
+      <section class="card section">
+        <h2>The big picture</h2>
+        <p>
+          Stinger's flywheels take time to spin up. If the blaster could <i>predict</i> you're about to pull the trigger,
+          it can start the motors early so they're at full speed the moment you fire. That's what the ML idle system does:
+          it watches your hand movements via an IMU (accelerometer + gyroscope) and continuously asks
+          "is this person about to shoot in the next 100–600ms?"
+        </p>
+        <div class="diagram"><b>IMU (100 Hz)</b> ──▸ <span class="acc2">sliding window</span> (50 samples = 500ms)
+       ──▸ <span class="acc">featurize</span> ──▸ <span class="acc">model(s)</span> ──▸ p(shoot)
+       ──▸ if p &gt; threshold → <b>spin up flywheels</b></div>
+        <p>
+          Two models are available on-device — a fast logistic regression (LR) and a more capable multi-layer perceptron (MLP).
+          You choose which one to use in the Motor → Idling menu (ML:LR or ML:MLP). Only one model runs at a time.
+          Having both lets you compare: the LR is simpler and faster to train, while the MLP can pick up
+          on subtler motion patterns at the cost of slightly more computation.
+        </p>
+      </section>
+
+      <!-- ───────── DATA COLLECTION ───────── -->
+      <section class="card section">
+        <h2>Data collection</h2>
+        <p>
+          When you activate <b>Start ML Recording</b>, the firmware logs every IMU sample plus the trigger state
+          to onboard flash at 100 Hz. Each sample is 17 bytes:
+        </p>
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td>timestamp</td><td><code>uint32</code></td><td>Milliseconds since boot (<code>millis()</code>)</td></tr>
+          <tr><td>ax, ay, az</td><td><code>int16 &times; 3</code></td><td>Accelerometer (raw LSB)</td></tr>
+          <tr><td>gx, gy, gz</td><td><code>int16 &times; 3</code></td><td>Gyroscope (raw LSB)</td></tr>
+          <tr><td>trigger</td><td><code>uint8</code></td><td>0 = not pulled, 1 = pulled</td></tr>
+        </table>
+        <p>
+          At 17 bytes/sample &times; 100 Hz, you get roughly <b>14–15 minutes</b> of recording in the available flash.
+          The log is wiped on every reboot, so each recording session is fresh.
+        </p>
+      </section>
+
+      <!-- ───────── SHOT DETECTION ───────── -->
+      <section class="card section">
+        <h2>Shot detection</h2>
+        <p>
+          Training needs labeled examples: "a shot happened here" vs "nothing happened here." We detect shots by finding
+          <b>rising edges</b> in the trigger signal (0 → 1 transitions). Shots closer than 1 second apart are merged
+          to avoid counting recoil bounce or rapid double-taps as separate events.
+        </p>
+        <p>
+          Each detected shot becomes a <b>positive training window</b>: the 500ms of IMU data ending ~100ms before
+          the trigger pull. The idea is that your hand was already moving into position during that window —
+          that's the motion pattern we want the model to recognize.
+        </p>
+        <p>
+          <b>Negative windows</b> are sampled from regions far away from any shot (at least 600ms before and 1 second after each trigger edge),
+          representing normal aiming, walking, or idle movement that should <i>not</i> trigger a spin-up.
+        </p>
+      </section>
+
+      <!-- ───────── FEATURES ───────── -->
+      <section class="card section">
+        <h2>Feature engineering</h2>
+        <p>
+          Raw IMU windows are 50 samples &times; 6 channels = 300 values. Rather than feeding all of these directly,
+          we compute summary statistics that capture the <i>shape</i> of the motion. Two feature sets are used:
+        </p>
+
+        <h3>Summary features (LR) — 18 values</h3>
+        <table>
+          <tr><th>Feature</th><th>Count</th><th>What it captures</th></tr>
+          <tr><td>mean per axis</td><td class="col-num">6</td><td>Average orientation / motion direction</td></tr>
+          <tr><td>std per axis</td><td class="col-num">6</td><td>How shaky or dynamic the motion is</td></tr>
+          <tr><td>abs-max per axis</td><td class="col-num">6</td><td>Peak intensity of movement</td></tr>
+        </table>
+
+        <h3>Rich features (MLP) — 30 values</h3>
+        <table>
+          <tr><th>Feature</th><th>Count</th><th>What it captures</th></tr>
+          <tr><td>mean per axis</td><td class="col-num">6</td><td>Same as above</td></tr>
+          <tr><td>std per axis</td><td class="col-num">6</td><td>Same as above</td></tr>
+          <tr><td>abs-max per axis</td><td class="col-num">6</td><td>Same as above</td></tr>
+          <tr><td>abs-mean per axis</td><td class="col-num">6</td><td>Average magnitude regardless of direction</td></tr>
+          <tr><td>accel magnitude (mean, std, max)</td><td class="col-num">3</td><td>Combined acceleration intensity</td></tr>
+          <tr><td>gyro magnitude (mean, std, max)</td><td class="col-num">3</td><td>Combined rotation intensity</td></tr>
+        </table>
+        <p class="note">
+          The magnitude features (sqrt of sum-of-squares across xyz) make the MLP less sensitive to how you hold
+          the blaster — rotation in any direction contributes equally.
+        </p>
+      </section>
+
+      <!-- ───────── THE MODELS ───────── -->
+      <section class="card section">
+        <h2>The two models</h2>
+
+        <h3>Logistic Regression (LR)</h3>
+        <p>
+          The simplest possible classifier: a weighted sum of the 18 summary features, passed through a sigmoid
+          to produce a probability between 0 and 1. Mathematically:
+        </p>
+        <div class="diagram">p(shoot) = sigmoid( <span class="acc2">w</span><sub>1</sub>&middot;x<sub>1</sub> + <span class="acc2">w</span><sub>2</sub>&middot;x<sub>2</sub> + ... + <span class="acc2">w</span><sub>18</sub>&middot;x<sub>18</sub> + <span class="acc2">b</span> )</div>
+        <p>
+          Training finds the 18 weights + 1 bias that best separate "about to shoot" from "not shooting."
+          We use gradient descent with L2 regularization to prevent overfitting on small datasets.
+        </p>
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Parameters</td><td>19 weights + 36 scaler values (220 bytes total)</td></tr>
+          <tr><td>Features</td><td>18 (summary)</td></tr>
+          <tr><td>Inference cost</td><td>~18 multiply-adds + 1 sigmoid</td></tr>
+          <tr><td>Training</td><td>&lt; 100ms in browser</td></tr>
+        </table>
+
+        <h3>Multi-Layer Perceptron (MLP)</h3>
+        <p>
+          A small neural network with two hidden layers. It can learn nonlinear patterns that logistic regression misses
+          — like "high rotation <i>combined with</i> sudden acceleration" being predictive even when neither alone is.
+        </p>
+        <div class="diagram"><span class="acc2">30 features</span> ──▸ [<span class="acc">64</span> neurons, ReLU] ──▸ [<span class="acc">32</span> neurons, ReLU] ──▸ [<span class="acc">1</span> output, sigmoid] ──▸ p(shoot)</div>
+        <p>
+          ReLU activation (max(0, x)) in the hidden layers lets the network model nonlinear decision boundaries.
+          The final sigmoid squashes the output to a probability.
+          Training uses the Adam optimizer with binary cross-entropy loss.
+        </p>
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Parameters</td><td>4,097 weights + 60 scaler values (16.2 KB total)</td></tr>
+          <tr><td>Architecture</td><td>30 → 64 → 32 → 1</td></tr>
+          <tr><td>Features</td><td>30 (rich)</td></tr>
+          <tr><td>Inference cost</td><td>~4K multiply-adds</td></tr>
+          <tr><td>Training</td><td>~1–3 seconds in browser</td></tr>
+        </table>
+      </section>
+
+      <!-- ───────── STANDARDIZATION ───────── -->
+      <section class="card section">
+        <h2>Standardization</h2>
+        <p>
+          Before feeding features to either model, each feature is <b>standardized</b>: the training mean is subtracted
+          and the result is divided by the training standard deviation. This puts all features on the same scale
+          (roughly zero-centered, unit variance) which is critical for both gradient descent convergence and
+          for the models treating all axes equally.
+        </p>
+        <div class="diagram">x_scaled = (x - <span class="acc">mean</span>) / <span class="acc">scale</span></div>
+        <p>
+          The scaler parameters (mean and scale per feature) are stored alongside the model weights and applied
+          at inference time on the device, so the firmware always normalizes features exactly the same way training did.
+        </p>
+      </section>
+
+      <!-- ───────── ON-DEVICE ───────── -->
+      <section class="card section">
+        <h2>On-device inference</h2>
+        <p>
+          The RP2040 runs inference on <b>Core 0</b> (the slow/UI core) while the 3200 Hz PID motor control loop
+          runs on Core 1. Core 1 pushes IMU samples into a sliding window ring buffer at 100 Hz.
+          Meanwhile, Core 0 runs the prediction loop at ~100 Hz:
+        </p>
+        <ol>
+          <li>Copies the current 50-sample window from the ring buffer</li>
+          <li>Computes the feature vector (summary for LR, rich for MLP)</li>
+          <li>Applies the stored scaler (subtract mean, divide by scale)</li>
+          <li>Runs the forward pass (dot product for LR, matrix multiplies for MLP)</li>
+          <li>If p &gt; threshold → signal Core 1 to spin up flywheels</li>
+        </ol>
+        <p>
+          The entire inference pipeline takes well under 1ms on the RP2040 — fast enough to run every sample with margin to spare.
+        </p>
+      </section>
+
+      <!-- ───────── MODEL FORMAT ───────── -->
+      <section class="card section">
+        <h2>Model file format (MLMD)</h2>
+        <p>
+          Models are stored as compact binary blobs with a 24-byte header followed by the payload (all float32, little-endian):
+        </p>
+        <table>
+          <tr><th>Offset</th><th>Size</th><th>Field</th><th>Description</th></tr>
+          <tr><td>0</td><td>4</td><td><code>magic</code></td><td>Always <code>"MLMD"</code></td></tr>
+          <tr><td>4</td><td>2</td><td><code>version</code></td><td>Currently 1</td></tr>
+          <tr><td>6</td><td>2</td><td><code>windowSamples</code></td><td>Must be 50</td></tr>
+          <tr><td>8</td><td>1</td><td><code>modelType</code></td><td>0 = LR, 1 = MLP</td></tr>
+          <tr><td>9</td><td>1</td><td><code>reserved</code></td><td>Zero</td></tr>
+          <tr><td>10</td><td>2</td><td><code>features</code></td><td>18 (LR) or 30 (MLP)</td></tr>
+          <tr><td>12</td><td>2</td><td><code>h1</code></td><td>Hidden layer 1 size (64 for MLP, 0 for LR)</td></tr>
+          <tr><td>14</td><td>2</td><td><code>h2</code></td><td>Hidden layer 2 size (32 for MLP, 0 for LR)</td></tr>
+          <tr><td>16</td><td>4</td><td><code>payloadBytes</code></td><td>Size of everything after the header</td></tr>
+          <tr><td>20</td><td>4</td><td><code>payloadCrc32</code></td><td>CRC32 over payload bytes</td></tr>
+        </table>
+        <p>
+          The CRC32 uses the standard IEEE polynomial (same as zlib). On load, the firmware verifies magic, version,
+          window size, architecture dimensions, payload size, and CRC — if anything is off, the model is rejected
+          and factory defaults are used instead.
+        </p>
+      </section>
+
+      <!-- ───────── BROWSER TRAINING ───────── -->
+      <section class="card section">
+        <h2>In-browser training</h2>
+        <p>
+          The entire training pipeline runs in your browser — no server, no Python, no install. Here's what happens
+          when you click "Connect to Stinger":
+        </p>
+        <ol>
+          <li><b>Pull log data</b> — The binary log is read from the device over Web Serial.</li>
+          <li><b>Parse</b> — The 17-byte samples are decoded into arrays of timestamps, IMU values, and trigger states.</li>
+          <li><b>Detect shots</b> — Rising edges in the trigger signal are found and filtered.</li>
+          <li><b>Extract dataset</b> — Positive windows (pre-shot) and negative windows (far from shots) are cut out.</li>
+          <li><b>Featurize</b> — Summary (18) and rich (30) feature vectors are computed for each window.</li>
+          <li><b>Scale</b> — StandardScaler is fit on the training data, then applied.</li>
+          <li><b>Train LR</b> — Gradient descent with L2 regularization, ~5000 iterations.</li>
+          <li><b>Train MLP</b> — Adam optimizer with binary cross-entropy, ~800 iterations.</li>
+          <li><b>Build MLMD</b> — Weights, scaler params, and CRC are packed into the binary format.</li>
+          <li><b>Upload</b> — The MLMD blobs are sent to the device over the same serial connection and loaded into RAM.</li>
+        </ol>
+        <p>
+          The heaviest step (MLP training) typically completes in 1–3 seconds on any modern browser.
+          No GPU needed — the dataset is small enough that plain JavaScript is fast.
+        </p>
+      </section>
+
+      <!-- ───────── DESIGN DECISIONS ───────── -->
+      <section class="card section">
+        <h2>Design decisions</h2>
+
+        <dl class="qa">
+          <dt>Why two models instead of just the MLP?</dt>
+          <dd>
+            Different people get better results with different models. The LR is simpler — it works well
+            when your pre-shot motion is distinctive along a single axis (e.g. a consistent raise-and-aim).
+            The MLP can learn nonlinear combinations across axes, which helps when your aiming style is more
+            complex. We train both and let you compare via the Motor → Idling menu (ML:LR vs ML:MLP)
+            so you can pick whichever feels better.
+          </dd>
+
+          <dt>Why 500ms windows?</dt>
+          <dd>
+            Empirically, the preparatory motion before a trigger pull starts about 300–600ms ahead. 500ms
+            (50 samples at 100 Hz) captures most of the relevant motion without including too much unrelated
+            background movement. Shorter windows miss the early part of the aiming gesture; longer windows
+            dilute the signal with noise.
+          </dd>
+
+          <dt>Why 100ms lead time?</dt>
+          <dd>
+            The prediction window ends 100ms <i>before</i> the trigger pull, not at the pull itself. This ensures
+            the model doesn't cheat by seeing the actual trigger motion (which would show up as a sharp spike
+            in the IMU). The 100ms margin means flywheels start spinning at least 100ms before you fire.
+          </dd>
+
+          <dt>Why personal models instead of a universal one?</dt>
+          <dd>
+            Everyone holds and aims differently. A model trained on one person's data performs poorly for another.
+            Personal training adapts to your specific grip, aiming style, and movement patterns. We ship factory
+            defaults trained on generic data, but personal models are significantly more accurate.
+          </dd>
+
+          <dt>Why 64→32→1 for the MLP?</dt>
+          <dd>
+            Small enough to run comfortably on an RP2040 (~4K multiply-adds), large enough to model the
+            nonlinear interactions between axes. We tried smaller networks (32→16→1) and they underfit;
+            larger ones (128→64→1) didn't improve accuracy and wasted RAM. The 64→32→1 architecture
+            hits the sweet spot for this problem size.
+          </dd>
+
+          <dt>Why summary features instead of raw samples?</dt>
+          <dd>
+            Raw windows are 300 values — too many features for the small training datasets we get (typically
+            20–100 shots). Feature engineering compresses the relevant information into 18–30 values, making
+            the models far more robust to overfitting. The features are also rotation-invariant thanks to
+            the magnitude statistics, which helps generalize across different holding angles.
+          </dd>
+
+          <dt>Why in-browser instead of a cloud service?</dt>
+          <dd>
+            Privacy (your motion data never leaves your machine), no account needed, no internet dependency
+            for the training step, works offline after first load, and zero infrastructure cost. The training
+            is lightweight enough that JavaScript handles it easily.
+          </dd>
+
+          <dt>Why CRC32 in the model file?</dt>
+          <dd>
+            Serial transmission can corrupt data. A single flipped bit in a weight could make the model
+            produce garbage predictions (and therefore spin up flywheels randomly). The CRC32 check on
+            load ensures the model is exactly as trained — if corruption occurred during upload, the firmware
+            falls back to factory defaults.
+          </dd>
+
+          <dt>What happens if the model is bad?</dt>
+          <dd>
+            The firmware always has factory-trained default weights compiled in. If a personal model file is
+            missing, corrupt, or fails validation, factory defaults are used automatically. You can explicitly
+            revert to factory defaults using the "Reset to factory model" button in the web tool (requires
+            a serial connection). You can also re-record and re-train at any time — the log is wiped on
+            every reboot, so each session starts clean.
+          </dd>
+        </dl>
+      </section>
+
+      <!-- ───────── WHAT TO EXPECT ───────── -->
+      <section class="card section">
+        <h2>What to expect</h2>
+        <p>
+          With a good recording session (5+ minutes, 20+ shots mixed with plenty of non-shooting movement):
+        </p>
+        <ul>
+          <li><b>Accuracy</b>: Both models should correctly identify 80–95% of pre-shot windows while keeping
+            false positive rate under 5–10%.</li>
+          <li><b>Flywheel behavior</b>: You'll notice the flywheels beginning to spool up slightly before you
+            fire. The spin-up window is short — they won't stay on indefinitely if you don't fire.</li>
+          <li><b>Latency reduction</b>: Instead of waiting for full spin-up after trigger pull, darts launch
+            nearly instantly because the motors are already at speed.</li>
+          <li><b>False positives</b>: Occasional unnecessary spin-ups will happen. Aggressive aiming motions
+            that mimic pre-shot patterns can trigger them. More training data (especially negatives) helps.
+            If one model gives too many false positives, try the other.</li>
+        </ul>
+        <p>
+          If results aren't great, record a longer session with more varied movements. The models improve
+          dramatically with more negative examples (non-shooting motion).
+        </p>
+      </section>
+
+      <p class="sub how-footer">
+        <a href="index.html" class="back">&larr; Back to personalization tool</a>
+      </p>
+    </main>
+  </body>
+</html>

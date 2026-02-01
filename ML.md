@@ -215,9 +215,14 @@ python python/ml_model_push.py --port /dev/cu.usbmodemXXXX
 python python/ml_model_push.py --port /dev/cu.usbmodemXXXX --info
 ```
 
-## Web UI (local MVP)
+## Web UI
 
-This repo includes `ml_web/`:
+This repo includes two local web UI options:
+
+1) **`ml_web/` (FastAPI backend)** — pulls `MLDUMP` in the browser, but runs the pipeline + training in Python on your machine.
+2) **`ml_web_local/` (browser-only, experimental)** — pulls `MLDUMP`, trains LR+MLP, and uploads weights entirely in the browser (no server).
+
+### Option A: `ml_web/` (FastAPI backend)
 
 - Browser (Web Serial) connects to the blaster, pulls `MLDUMP` with progress.
 - Backend (FastAPI) runs the dataset pipeline + trains LR+MLP.
@@ -239,3 +244,14 @@ Notes:
 - Don’t open the HTML as `file://` (fetches will fail).
 - The web UI has a **downloadable debug trace** for diagnosing WebSerial issues.
 
+### Option B: `ml_web_local/` (browser-only, experimental)
+
+Run a local static server (Web Serial requires `localhost` or `https`):
+
+```sh
+cd /Users/stan/Documents/GitHub/Firmware
+python3 -m http.server 8001 --directory ml_web_local
+```
+
+Open:
+- `http://127.0.0.1:8001/` (Chrome)
