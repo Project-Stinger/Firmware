@@ -12,6 +12,12 @@ char profileName[16] = "Profile";
 u8 profileColor[3] = {255, 255, 255};
 u16 profileColor565 = 0xFFFF;
 bool extendedRpmRange = false;
+#if HW_VERSION == 2
+	static char mlRecordingStatusStr[32] = "ML Recording: OFF";
+	static MenuItem *mlRecordingStatusItem = nullptr;
+	static MenuItem *mlRecordingStartItem = nullptr;
+	static MenuItem *mlRecordingStopItem = nullptr;
+#endif
 
 u8 rotationTickSensitivity = 0;
 const char rotationSensitivityStrings[3][10] = {"Slow", "Medium", "Fast"};
@@ -314,8 +320,8 @@ void initMenu() {
 		->addChild(new MenuItem(VariableType::U8, &copyToProfile, 1, 1, 1, MAX_PROFILE_COUNT, 1, 0, EEPROM_RUNTIME_OPTION, false, "swapProfile", "Swap with "))
 		->addChild(new MenuItem(MenuItemType::ACTION, "swapProfileAction", "Swap"));
 
-	// ======================== Device Menu ========================
-	MenuItem *deviceMenu = new MenuItem(MenuItemType::SUBMENU, "device", "Device");
+		// ======================== Device Menu ========================
+		MenuItem *deviceMenu = new MenuItem(MenuItemType::SUBMENU, "device", "Device");
 	MenuItem *bootScreen = new MenuItem(MenuItemType::SUBMENU, "bootScreen", "Boot Screen");
 	MenuItem *safetyMenu = new MenuItem(MenuItemType::SUBMENU, "safetyMenu", "Safety");
 	MenuItem *hardwareMenu = new MenuItem(MenuItemType::SUBMENU, "hardwareMenu", "Hardware Setup");
@@ -325,17 +331,19 @@ void initMenu() {
 	MenuItem *escTempCalibration = new MenuItem(MenuItemType::SUBMENU, "escTempCalibration", "ESC Temp Calibration");
 	MenuItem *firmwareInfoMenu = new MenuItem(MenuItemType::SUBMENU, "firmwareInfoMenu", "Firmware Info");
 	MenuItem *resetMenu = new MenuItem(MenuItemType::SUBMENU, "resetMenu", "Factory Reset");
-	deviceMenu
+		deviceMenu
 		->addChild(bootScreen)
 		->addChild(safetyMenu)
 		->addChild(hardwareMenu)
 		->addChild(new MenuItem(MenuItemType::CUSTOM, "docs", "Documentation"))
 		->addChild(firmwareInfoMenu)
 		->addChild(resetMenu)
-#if HW_VERSION == 2
-		->addChild(new MenuItem(MenuItemType::ACTION, "mlRecording", "ML Recording", "Start recording IMU data to flash for ML training"))
-#endif
-		;
+	#if HW_VERSION == 2
+			->addChild((mlRecordingStatusItem = new MenuItem(MenuItemType::INFO, "mlRecordingStatus", mlRecordingStatusStr)))
+			->addChild((mlRecordingStartItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStart", "Start ML Recording", "Start recording IMU data to flash for ML training datasets")))
+			->addChild((mlRecordingStopItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStop", "Stop ML Recording", "Stop recording (flushes remaining buffered samples when safe)")))
+	#endif
+			;
 	bootScreen
 		->addChild(new MenuItem(deviceName, 16, "Stinger", EEPROM_POS_DEVICE_NAME, false, "deviceName", "Device Name"))
 		->addChild(new MenuItem(ownerName, 32, "John Doe", EEPROM_POS_OWNER_NAME, false, "ownerName", "Owner"))
@@ -509,18 +517,41 @@ void initMenu() {
 	mainMenu->search("enterTournamentMode")
 		->setOnEnterFunction(enableTournamentMode)
 		->setVisible(false);
-#if HW_VERSION == 2
-	mainMenu->search("mlRecording")->setOnEnterFunction([](MenuItem *_item) -> bool {
-		if (!mlLogIsActive()) {
-			mlLogStartRecording();
+	#if HW_VERSION == 2
+		if (mlRecordingStartItem) {
+			mlRecordingStartItem->setOnEnterFunction([](MenuItem *_item) -> bool {
+				mlLogStartRecording();
+				return false;
+			});
 		}
-		return false;
-	});
-	mainMenu->search("ledBrightness")
-		->setOnEnterFunction(onBrightnessEnter)
-		->setOnExitFunction(onBrightnessExit)
-		->setOnChangeFunction(onBrightnessChange);
-#endif
+		if (mlRecordingStopItem) {
+			mlRecordingStopItem->setOnEnterFunction([](MenuItem *_item) -> bool {
+				mlLogStopRecording();
+				return false;
+			});
+		}
+		deviceMenu->setCustomLoop([](MenuItem *item) -> bool {
+			static bool initialized = false;
+			static bool lastActive = false;
+			const bool active = mlLogIsActive();
+			if (!initialized) {
+				initialized = true;
+				lastActive = !active; // force first update
+			}
+			if (active != lastActive) {
+				lastActive = active;
+				snprintf(mlRecordingStatusStr, sizeof(mlRecordingStatusStr), "ML Recording: %s", active ? "ON" : "OFF");
+				if (mlRecordingStartItem) mlRecordingStartItem->setVisible(!active);
+				if (mlRecordingStopItem) mlRecordingStopItem->setVisible(active);
+				item->triggerFullRedraw();
+			}
+			return true;
+		});
+		mainMenu->search("ledBrightness")
+			->setOnEnterFunction(onBrightnessEnter)
+			->setOnExitFunction(onBrightnessExit)
+			->setOnChangeFunction(onBrightnessChange);
+	#endif
 	loadSettings();
 	MenuItem::settingsAreInEeprom = true;
 

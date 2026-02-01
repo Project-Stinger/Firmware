@@ -51,6 +51,8 @@ static bool logFullWarned = false;
 static u32 sampleCountWritten = 0;
 static u8 decim = 0;
 static bool flushRequested = false;
+static bool stopRequested = false;
+static bool sessionStartedThisBoot = false;
 
 static inline bool isFiringCritical() {
 	// Avoid flash writes / export while actually firing / ramping down.
@@ -151,6 +153,16 @@ void mlLogInit() {
 		}
 	}
 	fsReady = true;
+	sessionStartedThisBoot = false;
+	logActive = false;
+	stopRequested = false;
+	flushRequested = false;
+	logFullWarned = false;
+	sampleCountWritten = 0;
+	decim = 0;
+
+	// New session per boot (user asked: only reset to 0% after a full reboot).
+	if (LittleFS.exists(ML_LOG_FILENAME)) LittleFS.remove(ML_LOG_FILENAME);
 
 	Serial.println("[ml] filesystem ready");
 }
@@ -161,7 +173,26 @@ void mlLogStartRecording() {
 		return;
 	}
 
-	logFile = LittleFS.open(ML_LOG_FILENAME, "w");
+	if (logFullWarned) {
+		Serial.println("[ml] ERROR: log is full; reboot to start a new session");
+		return;
+	}
+
+	// Idempotent: if already active, do nothing.
+	if (logActive) return;
+
+	// If a stop was requested, cancel it and keep writing.
+	stopRequested = false;
+	flushRequested = false;
+
+	if (logFile) {
+		logFile.flush();
+		logFile.close();
+	}
+
+	// First start of the boot truncates/creates a new file. Subsequent starts append.
+	const char *mode = sessionStartedThisBoot ? "a" : "w";
+	logFile = LittleFS.open(ML_LOG_FILENAME, mode);
 	if (!logFile) {
 		Serial.println("[ml] ERROR: failed to open log file");
 		return;
@@ -170,10 +201,26 @@ void mlLogStartRecording() {
 	__atomic_store_n(&spscWr, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&spscRd, 0, __ATOMIC_RELAXED);
 	decim = 0;
-	sampleCountWritten = 0;
-	logFullWarned = false;
+	if (!sessionStartedThisBoot) {
+		sampleCountWritten = 0;
+		logFullWarned = false;
+		sessionStartedThisBoot = true;
+	} else {
+		// Resume: reflect current file size for accurate % display.
+		sampleCountWritten = (u32)(logFile.size() / sizeof(MlSample));
+	}
 	logActive = true;
+	stopRequested = false;
 	Serial.println("[ml] recording started");
+}
+
+void mlLogStopRecording() {
+	// Stop capturing immediately; flush the remaining buffered samples on core 0 when safe.
+	if (!logActive && !stopRequested) return;
+	logActive = false;
+	stopRequested = true;
+	flushRequested = true;
+	Serial.println("[ml] recording stopping");
 }
 
 void mlLogLoop() {
@@ -205,10 +252,94 @@ void mlLogSlowLoop() {
 	wasFiring = firing;
 	if (firing) return;
 
-	// Export command (consumer-friendly): send "MLDUMP\n" over USB serial.
-	// Use our python helper to save `ml_log.bin` without needing debug tools.
-	static char cmdBuf[16];
+	// Serial commands for consumer-friendly workflows:
+	// - MLDUMP / MLINFO (logs)
+	// - MLMODEL_* (upload + load a personalized model without reflashing UF2)
+	static char cmdBuf[64];
 	static u8 cmdLen = 0;
+	static bool modelRxActive = false;
+	static File modelRxFile;
+	static u32 modelRxRemaining = 0;
+	static u32 modelRxCrc = 0;
+	static u32 modelRxExpectedCrc = 0;
+	enum class ModelRxTarget : u8 {
+		GENERIC,
+		LR,
+		MLP,
+	};
+	static ModelRxTarget modelRxTarget = ModelRxTarget::GENERIC;
+	static elapsedMillis modelRxTimer = 0;
+
+	auto modelRxAbort = [&]() {
+		modelRxActive = false;
+		modelRxRemaining = 0;
+		modelRxCrc = 0;
+		modelRxExpectedCrc = 0;
+		if (modelRxFile) {
+			modelRxFile.flush();
+			modelRxFile.close();
+		}
+		if (LittleFS.exists("/ml_model.tmp")) LittleFS.remove("/ml_model.tmp");
+		if (LittleFS.exists("/ml_model_lr.tmp")) LittleFS.remove("/ml_model_lr.tmp");
+		if (LittleFS.exists("/ml_model_mlp.tmp")) LittleFS.remove("/ml_model_mlp.tmp");
+	};
+
+	// If we are currently receiving raw model bytes, drain them first.
+	if (modelRxActive) {
+		if (modelRxTimer > 10000) { // 10s timeout
+			Serial.println("[ml] MLMODEL_ERR timeout");
+			modelRxAbort();
+		} else {
+			while (Serial.available() && modelRxRemaining) {
+				uint8_t buf[256];
+				const size_t want = (modelRxRemaining < sizeof(buf)) ? (size_t)modelRxRemaining : sizeof(buf);
+				const int n = Serial.readBytes((char *)buf, want);
+				if (n <= 0) break;
+				modelRxTimer = 0;
+				modelRxFile.write(buf, (size_t)n);
+				// CRC32 update (same poly as in mlInfer)
+				u32 crc = ~modelRxCrc;
+				for (int i = 0; i < n; i++) {
+					u32 x = (crc ^ buf[i]) & 0xFFu;
+					for (u32 j = 0; j < 8; j++) x = (x >> 1) ^ (0xEDB88320u & (-(i32)(x & 1u)));
+					crc = (crc >> 8) ^ x;
+				}
+				modelRxCrc = ~crc;
+				modelRxRemaining -= (u32)n;
+			}
+			if (modelRxActive && modelRxRemaining == 0) {
+				modelRxFile.flush();
+				modelRxFile.close();
+				modelRxActive = false;
+
+				if (modelRxCrc != modelRxExpectedCrc) {
+					Serial.println("[ml] MLMODEL_ERR crc");
+					modelRxAbort();
+				} else {
+					bool ok = false;
+					if (modelRxTarget == ModelRxTarget::LR) {
+						if (LittleFS.exists("/ml_model_lr.bin")) LittleFS.remove("/ml_model_lr.bin");
+						ok = LittleFS.rename("/ml_model_lr.tmp", "/ml_model_lr.bin");
+					} else if (modelRxTarget == ModelRxTarget::MLP) {
+						if (LittleFS.exists("/ml_model_mlp.bin")) LittleFS.remove("/ml_model_mlp.bin");
+						ok = LittleFS.rename("/ml_model_mlp.tmp", "/ml_model_mlp.bin");
+					} else {
+						if (LittleFS.exists("/ml_model.bin")) LittleFS.remove("/ml_model.bin");
+						ok = LittleFS.rename("/ml_model.tmp", "/ml_model.bin");
+					}
+					if (!ok) {
+						Serial.println("[ml] MLMODEL_ERR rename");
+						modelRxAbort();
+					} else {
+						Serial.println("[ml] MLMODEL_OK");
+					}
+				}
+			}
+		}
+		// Don't parse command text while receiving raw bytes.
+		goto flush_logic;
+	}
+
 	while (Serial.available()) {
 		const char c = (char)Serial.read();
 		if (c == '\n' || c == '\r') {
@@ -217,6 +348,100 @@ void mlLogSlowLoop() {
 				mlLogExportBinary();
 			} else if (cmdLen && strcmp(cmdBuf, "MLINFO") == 0) {
 				Serial.printf("[ml] samples_written=%lu (~%.1fs)\n", sampleCountWritten, sampleCountWritten / 100.0f);
+			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_INFO") == 0) {
+				mlInferPrintInfo();
+			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_LOAD") == 0) {
+				if (mlInferLoadUserModel()) Serial.println("[ml] MLMODEL_LOADED");
+				else Serial.println("[ml] MLMODEL_ERR load");
+			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_LOAD_LR") == 0) {
+				if (mlInferLoadUserModelType(ML_MODEL_LOGREG)) Serial.println("[ml] MLMODEL_LOADED");
+				else Serial.println("[ml] MLMODEL_ERR load");
+			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_LOAD_MLP") == 0) {
+				if (mlInferLoadUserModelType(ML_MODEL_MLP)) Serial.println("[ml] MLMODEL_LOADED");
+				else Serial.println("[ml] MLMODEL_ERR load");
+			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_DELETE") == 0) {
+				if (mlInferDeleteUserModel()) Serial.println("[ml] MLMODEL_DELETED");
+				else Serial.println("[ml] MLMODEL_ERR delete");
+			} else if (cmdLen && strncmp(cmdBuf, "MLMODEL_PUT ", 12) == 0) {
+				// Format: MLMODEL_PUT <size> <crc32hex>
+				// CRC is over the full file bytes.
+				if (!fsReady) {
+					Serial.println("[ml] MLMODEL_ERR fs");
+				} else if (isFiringCritical()) {
+					Serial.println("[ml] MLMODEL_ERR busy");
+				} else {
+					u32 size = 0;
+					u32 crc = 0;
+					if (sscanf(cmdBuf + 12, "%lu %lx", &size, &crc) == 2 && size > 0 && size < 200000) {
+						if (LittleFS.exists("/ml_model.tmp")) LittleFS.remove("/ml_model.tmp");
+						modelRxFile = LittleFS.open("/ml_model.tmp", "w");
+						if (!modelRxFile) {
+							Serial.println("[ml] MLMODEL_ERR open");
+						} else {
+							modelRxActive = true;
+							modelRxTarget = ModelRxTarget::GENERIC;
+							modelRxRemaining = size;
+							modelRxExpectedCrc = crc;
+							modelRxCrc = 0;
+							modelRxTimer = 0;
+							Serial.println("[ml] MLMODEL_READY");
+						}
+					} else {
+						Serial.println("[ml] MLMODEL_ERR args");
+					}
+				}
+			} else if (cmdLen && strncmp(cmdBuf, "MLMODEL_PUT_LR ", 15) == 0) {
+				if (!fsReady) {
+					Serial.println("[ml] MLMODEL_ERR fs");
+				} else if (isFiringCritical()) {
+					Serial.println("[ml] MLMODEL_ERR busy");
+				} else {
+					u32 size = 0;
+					u32 crc = 0;
+					if (sscanf(cmdBuf + 15, "%lu %lx", &size, &crc) == 2 && size > 0 && size < 200000) {
+						if (LittleFS.exists("/ml_model_lr.tmp")) LittleFS.remove("/ml_model_lr.tmp");
+						modelRxFile = LittleFS.open("/ml_model_lr.tmp", "w");
+						if (!modelRxFile) {
+							Serial.println("[ml] MLMODEL_ERR open");
+						} else {
+							modelRxActive = true;
+							modelRxTarget = ModelRxTarget::LR;
+							modelRxRemaining = size;
+							modelRxExpectedCrc = crc;
+							modelRxCrc = 0;
+							modelRxTimer = 0;
+							Serial.println("[ml] MLMODEL_READY");
+						}
+					} else {
+						Serial.println("[ml] MLMODEL_ERR args");
+					}
+				}
+			} else if (cmdLen && strncmp(cmdBuf, "MLMODEL_PUT_MLP ", 16) == 0) {
+				if (!fsReady) {
+					Serial.println("[ml] MLMODEL_ERR fs");
+				} else if (isFiringCritical()) {
+					Serial.println("[ml] MLMODEL_ERR busy");
+				} else {
+					u32 size = 0;
+					u32 crc = 0;
+					if (sscanf(cmdBuf + 16, "%lu %lx", &size, &crc) == 2 && size > 0 && size < 200000) {
+						if (LittleFS.exists("/ml_model_mlp.tmp")) LittleFS.remove("/ml_model_mlp.tmp");
+						modelRxFile = LittleFS.open("/ml_model_mlp.tmp", "w");
+						if (!modelRxFile) {
+							Serial.println("[ml] MLMODEL_ERR open");
+						} else {
+							modelRxActive = true;
+							modelRxTarget = ModelRxTarget::MLP;
+							modelRxRemaining = size;
+							modelRxExpectedCrc = crc;
+							modelRxCrc = 0;
+							modelRxTimer = 0;
+							Serial.println("[ml] MLMODEL_READY");
+						}
+					} else {
+						Serial.println("[ml] MLMODEL_ERR args");
+					}
+				}
 			}
 			cmdLen = 0;
 		} else if (cmdLen + 1 < sizeof(cmdBuf)) {
@@ -226,10 +451,28 @@ void mlLogSlowLoop() {
 		}
 	}
 
-	if (!logActive || !fsReady || !logFile) return;
+	flush_logic:
+		if ((!logActive && !stopRequested) || !fsReady) return;
+		if (!logFile) {
+			// If we were asked to stop but the file is already closed (e.g. full/error), clear the request.
+			if (stopRequested) {
+				stopRequested = false;
+				flushRequested = false;
+			}
+			return;
+		}
 
-	const u32 pending = spscCount();
-	if (!pending) return;
+		const u32 pending = spscCount();
+		if (!pending) {
+			if (stopRequested) {
+				logFile.flush();
+				logFile.close();
+				stopRequested = false;
+				flushRequested = false;
+				Serial.println("[ml] recording stopped");
+			}
+			return;
+		}
 
 	// Default behavior: buffer during normal use, then flush after a shot.
 	// Also flush if buffer gets close to full, to avoid dropping long idle segments.
@@ -241,15 +484,15 @@ void mlLogSlowLoop() {
 	// Drain in bounded chunks to keep core 0 responsive.
 	(void)mlLogFlushSome(32);
 
-	// Once we've started flushing post-shot, keep flushing until the buffer is mostly empty.
-	// This reduces flash activity between shots and keeps more contiguous pre-shot windows in RAM.
-	if (flushRequested) {
-		constexpr u32 LOW_WATERMARK = SPSC_CAPACITY / 8;
-		if (spscCount() <= LOW_WATERMARK) {
-			flushRequested = false;
+		// Once we've started flushing post-shot, keep flushing until the buffer is mostly empty.
+		// This reduces flash activity between shots and keeps more contiguous pre-shot windows in RAM.
+		if (flushRequested && !stopRequested) {
+			constexpr u32 LOW_WATERMARK = SPSC_CAPACITY / 8;
+			if (spscCount() <= LOW_WATERMARK) {
+				flushRequested = false;
+			}
 		}
 	}
-}
 
 bool mlLogIsActive() {
 	return logActive;

@@ -19,11 +19,14 @@ struct __attribute__((packed)) MlSample {
 /// @brief Called once from setup() on core 0. Mounts filesystem only.
 void mlLogInit();
 
-/// @brief Called from menu to start recording.
-void mlLogStartRecording();
+	/// @brief Called from menu to start recording.
+	void mlLogStartRecording();
 
-/// @brief Called from loop1() (core 1). Captures 100Hz samples into a RAM buffer.
-void mlLogLoop();
+	/// @brief Called from menu to stop recording (flushes remaining buffered samples when safe).
+	void mlLogStopRecording();
+
+	/// @brief Called from loop1() (core 1). Captures 100Hz samples into a RAM buffer.
+	void mlLogLoop();
 
 /// @brief Called from loop() (core 0). Flushes RAM buffer to flash when safe.
 void mlLogSlowLoop();

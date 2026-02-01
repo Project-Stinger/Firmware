@@ -32,6 +32,24 @@ float mlInferGetCachedProb(MlModel model);
 /// @brief Age in ms since last cached probability update (core 0).
 u32 mlInferCachedAgeMs();
 
+/// @brief Returns true if a user model file exists in LittleFS.
+bool mlInferUserModelExists();
+
+/// @brief Load user model from LittleFS (default path) into RAM and start using it.
+/// This loads either LR or MLP based on the file header.
+bool mlInferLoadUserModel();
+
+/// @brief Load a specific user model type from its dedicated file.
+/// - LR: /ml_model_lr.bin
+/// - MLP: /ml_model_mlp.bin
+bool mlInferLoadUserModelType(MlModel model);
+
+/// @brief Clear user model file from LittleFS.
+bool mlInferDeleteUserModel();
+
+/// @brief Print model info to Serial (core 0).
+void mlInferPrintInfo();
+
 /// @brief Called from loop1() (core 1) on gyro cycles. Handles decimation
 /// and pushes samples into the sliding window at 100 Hz.
 void mlInferLoop();
