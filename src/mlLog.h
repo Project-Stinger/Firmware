@@ -34,6 +34,9 @@ void mlLogSlowLoop();
 /// @brief Returns true if ML logging is actively recording.
 bool mlLogIsActive();
 
+/// @brief Returns true if recording is currently paused due to no motion.
+bool mlLogIsPaused();
+
 /// @brief Returns flash usage as 0–100 percentage.
 u8 mlLogFlashPercent();
 

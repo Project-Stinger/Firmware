@@ -4,6 +4,7 @@
 
 #include <LittleFS.h>
 #include <cstring>
+#include <algorithm>
 
 // 1600 Hz gyro rate / 16 = 100 Hz output.
 constexpr u32 ML_LOG_DECIMATION = 16;
@@ -47,12 +48,16 @@ static inline u32 spscCount() {
 static bool fsReady = false;
 static File logFile;
 static volatile bool logActive = false; // set in init, cleared on full/error
+static volatile bool logPausedStill = false; // set on core 1
+static volatile bool logPausedUsb = false;   // set on core 0 when USB session active
 static bool logFullWarned = false;
 static u32 sampleCountWritten = 0;
 static u8 decim = 0;
 static bool flushRequested = false;
 static bool stopRequested = false;
 static bool sessionStartedThisBoot = false;
+
+static inline bool usbSess() { return ::usbCdcActive(); }
 
 static inline bool isFiringCritical() {
 	// Avoid flash writes / export while actually firing / ramping down.
@@ -122,21 +127,45 @@ static void mlLogExportBinary() {
 		Serial.println("[ml] ERROR: no log file");
 		// fall through to resume
 	} else {
-		const u32 size = f.size();
-		Serial.printf("MLDUMP1 %lu\n", size);
-
-		uint8_t buf[256];
-		while (true) {
-			const int n = f.read(buf, sizeof(buf));
-			if (n <= 0) break;
-			Serial.write(buf, (size_t)n);
+		// Some FS/USB timing combinations can make f.size() disagree with the number of
+		// bytes actually readable right now. Do a quick count pass, then stream exactly
+		// that many bytes so the host never hangs waiting.
+		u32 size = 0;
+		{
+			uint8_t buf[256];
+			while (true) {
+				const int n = f.read(buf, sizeof(buf));
+				if (n <= 0) break;
+				size += (u32)n;
+			}
+			f.close();
 		}
-		f.close();
-		Serial.println("\nMLDUMP_DONE");
+		if (!size) {
+			Serial.println("[ml] ERROR: no log data");
+		} else {
+			Serial.printf("MLDUMP1 %lu\n", size);
+			File f2 = LittleFS.open(ML_LOG_FILENAME, "r");
+			if (!f2) {
+				Serial.println("[ml] ERROR: no log file");
+			} else {
+				uint8_t buf[256];
+				u32 sent = 0;
+				while (sent < size) {
+					const int want = (size - sent) < sizeof(buf) ? (int)(size - sent) : (int)sizeof(buf);
+					const int n = f2.read(buf, want);
+					if (n <= 0) break;
+					Serial.write(buf, (size_t)n);
+					sent += (u32)n;
+				}
+				f2.close();
+				Serial.println("\nMLDUMP_DONE");
+			}
+		}
 	}
 
 	// Resume logging (append) unless it was already stopped due to full/error.
-	if (fsReady && !logFullWarned) {
+	// While USB is connected (service mode), keep the log file closed so model upload is reliable.
+	if (fsReady && !logFullWarned && !usbSess()) {
 		logFile = LittleFS.open(ML_LOG_FILENAME, "a");
 		if (logFile) {
 			logActive = wasActive;
@@ -155,6 +184,8 @@ void mlLogInit() {
 	fsReady = true;
 	sessionStartedThisBoot = false;
 	logActive = false;
+	logPausedStill = false;
+	logPausedUsb = false;
 	stopRequested = false;
 	flushRequested = false;
 	logFullWarned = false;
@@ -180,6 +211,8 @@ void mlLogStartRecording() {
 
 	// Idempotent: if already active, do nothing.
 	if (logActive) return;
+	logPausedStill = false;
+	logPausedUsb = false;
 
 	// If a stop was requested, cancel it and keep writing.
 	stopRequested = false;
@@ -210,6 +243,8 @@ void mlLogStartRecording() {
 		sampleCountWritten = (u32)(logFile.size() / sizeof(MlSample));
 	}
 	logActive = true;
+	logPausedStill = false;
+	logPausedUsb = false;
 	stopRequested = false;
 	Serial.println("[ml] recording started");
 }
@@ -218,6 +253,8 @@ void mlLogStopRecording() {
 	// Stop capturing immediately; flush the remaining buffered samples on core 0 when safe.
 	if (!logActive && !stopRequested) return;
 	logActive = false;
+	logPausedStill = false;
+	logPausedUsb = false;
 	stopRequested = true;
 	flushRequested = true;
 	Serial.println("[ml] recording stopping");
@@ -227,6 +264,23 @@ void mlLogLoop() {
 	if (!logActive) return;
 	if (++decim < ML_LOG_DECIMATION) return;
 	decim = 0;
+
+	// While USB is connected, pause sampling to avoid growing the file while exporting /
+	// uploading models over Serial.
+	if (usbSess()) return;
+
+	// Auto-pause logging while completely still to save flash and keep datasets cleaner.
+	// Uses per-sample deltas (not absolute accel magnitude) so gravity doesn't matter.
+	constexpr i32 STILL_DELTA = 30;            // raw i16 delta threshold (noise tolerant)
+	constexpr i32 UNPAUSE_DELTA = 140;         // hysteresis (harder to resume)
+	constexpr i32 STILL_GYRO_ABS = 45;         // gyro near-zero threshold
+	constexpr i32 UNPAUSE_GYRO_ABS = 240;      // gyro threshold to resume even if deltas are small
+	constexpr u32 STILL_SAMPLES_TO_PAUSE = 50; // ~0.50s @ 100Hz
+	constexpr u32 UNPAUSE_SAMPLES = 10;        // require sustained motion to resume
+	static bool haveLast = false;
+	static i16 lastAx = 0, lastAy = 0, lastAz = 0, lastGx = 0, lastGy = 0, lastGz = 0;
+	static u32 stillCount = 0;
+	static u32 wakeCount = 0;
 
 	MlSample s;
 	s.timestamp_ms = millis();
@@ -238,11 +292,104 @@ void mlLogLoop() {
 	s.gz = (i16)gyroDataRaw[2];
 	s.trigger = triggerState ? 1 : 0;
 
+	// Never pause while the trigger is down (we want to capture around shots),
+	// and reset stillness tracking when logging starts.
+	if (!haveLast) {
+		haveLast = true;
+		lastAx = s.ax; lastAy = s.ay; lastAz = s.az;
+		lastGx = s.gx; lastGy = s.gy; lastGz = s.gz;
+		stillCount = 0;
+		logPausedStill = false;
+	} else {
+		auto iabs = [](i32 v) -> i32 { return (v < 0) ? -v : v; };
+		i32 maxDelta = 0;
+		maxDelta = std::max(maxDelta, iabs((i32)s.ax - (i32)lastAx));
+		maxDelta = std::max(maxDelta, iabs((i32)s.ay - (i32)lastAy));
+		maxDelta = std::max(maxDelta, iabs((i32)s.az - (i32)lastAz));
+		maxDelta = std::max(maxDelta, iabs((i32)s.gx - (i32)lastGx));
+		maxDelta = std::max(maxDelta, iabs((i32)s.gy - (i32)lastGy));
+		maxDelta = std::max(maxDelta, iabs((i32)s.gz - (i32)lastGz));
+
+		lastAx = s.ax; lastAy = s.ay; lastAz = s.az;
+		lastGx = s.gx; lastGy = s.gy; lastGz = s.gz;
+
+		const bool gyroStill =
+			iabs((i32)s.gx) <= STILL_GYRO_ABS &&
+			iabs((i32)s.gy) <= STILL_GYRO_ABS &&
+			iabs((i32)s.gz) <= STILL_GYRO_ABS;
+
+		if (s.trigger) {
+			stillCount = 0;
+			wakeCount = 0;
+			logPausedStill = false;
+		} else if (!logPausedStill) {
+			if (gyroStill && maxDelta <= STILL_DELTA) {
+				if (stillCount < 0xFFFFFFFFu) stillCount++;
+				if (stillCount >= STILL_SAMPLES_TO_PAUSE) logPausedStill = true;
+			} else {
+				stillCount = 0;
+			}
+		} else {
+			// paused: only unpause on a stronger movement
+			const bool gyroWake =
+				iabs((i32)s.gx) >= UNPAUSE_GYRO_ABS ||
+				iabs((i32)s.gy) >= UNPAUSE_GYRO_ABS ||
+				iabs((i32)s.gz) >= UNPAUSE_GYRO_ABS;
+			const bool wantsWake = gyroWake || !gyroStill || maxDelta >= UNPAUSE_DELTA;
+			if (wantsWake) {
+				if (wakeCount < 0xFFFFFFFFu) wakeCount++;
+			} else {
+				wakeCount = 0;
+			}
+			if (wakeCount >= UNPAUSE_SAMPLES) {
+				stillCount = 0;
+				wakeCount = 0;
+				logPausedStill = false;
+			}
+		}
+	}
+
+	if (logPausedStill) return;
+
 	// Best effort: drop if buffer full.
 	spscPush(s);
 }
 
 void mlLogSlowLoop() {
+	// While connected over USB, pause logging.
+	// IMPORTANT: avoid background flash writes while USB is active, otherwise USB CDC
+	// can become unreliable during model upload (flash ops can stall interrupts).
+	static bool usbWasActive = false;
+	static bool resumeAfterUsb = false;
+	const bool usbNow = usbSess();
+	logPausedUsb = usbNow;
+
+	// On USB entry: close the log file (and stop background flush) so LittleFS operations
+	// for model upload don't contend with an open log file handle.
+	if (usbNow && !usbWasActive) {
+		usbWasActive = true;
+		resumeAfterUsb = logActive;
+		// Pause capturing without resetting session counters.
+		flushRequested = false;
+		stopRequested = false;
+		if (logFile) {
+			logFile.flush();
+			logFile.close();
+		}
+	}
+	// On USB exit: reopen the log file if it was previously recording.
+	if (!usbNow && usbWasActive) {
+		usbWasActive = false;
+		if (resumeAfterUsb && fsReady && !logFullWarned) {
+			logFile = LittleFS.open(ML_LOG_FILENAME, "a");
+			// If reopen fails, leave logActive true but sampling will be best-effort; user can toggle recording.
+			if (logFile) {
+				sampleCountWritten = (u32)(logFile.size() / sizeof(MlSample));
+			}
+		}
+		resumeAfterUsb = false;
+	}
+
 	const bool firing = isFiringCritical();
 	static bool wasFiring = false;
 	if (wasFiring && !firing) {
@@ -250,7 +397,6 @@ void mlLogSlowLoop() {
 		flushRequested = true;
 	}
 	wasFiring = firing;
-	if (firing) return;
 
 	// Serial commands for consumer-friendly workflows:
 	// - MLDUMP / MLINFO (logs)
@@ -452,6 +598,12 @@ void mlLogSlowLoop() {
 	}
 
 	flush_logic:
+		// While USB is active, do not perform background flash flushes.
+		// MLDUMP explicitly flushes/pauses for a consistent export.
+		if (usbNow) return;
+		// Never write to flash while firing / ramping, but still allow command parsing above so
+		// the host gets a deterministic response (busy/ready) instead of silence.
+		if (firing) return;
 		if ((!logActive && !stopRequested) || !fsReady) return;
 		if (!logFile) {
 			// If we were asked to stop but the file is already closed (e.g. full/error), clear the request.
@@ -496,6 +648,12 @@ void mlLogSlowLoop() {
 
 bool mlLogIsActive() {
 	return logActive;
+}
+
+bool mlLogIsPaused() {
+	const bool a = __atomic_load_n(&logPausedStill, __ATOMIC_ACQUIRE);
+	const bool b = __atomic_load_n(&logPausedUsb, __ATOMIC_ACQUIRE);
+	return a || b;
 }
 
 u8 mlLogFlashPercent() {

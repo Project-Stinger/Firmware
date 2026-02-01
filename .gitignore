@@ -2,7 +2,6 @@
 .venv
 .claude/
 ml_out/
-ml_training/
 *.bin
 *.csv
 *.uf2
@@ -16,3 +15,5 @@ python/*.pyc
 .vscode/ipch
 include/git_version.h
 .last_git_hash
+_local_artifacts/
+ml_web/_jobs/

@@ -237,6 +237,23 @@ void setIdleState(MenuItem *_item) {
 
 void __not_in_flash_func(runOperationSm)() {
 	static bool firstRun = true;
+
+#if HW_VERSION == 2
+	// USB service mode:
+	// When a host has opened the CDC port (DTR asserted), keep it in a safe state so MLDUMP / model
+	// upload is reliable and motors can't spin.
+	// When the host disconnects, return through STATE_SETUP so ESC comm/EDT is re-established.
+	static bool usbPrev = false;
+	const bool usbNow = ::usbCdcActive();
+	if (usbNow && operationState != STATE_USB) {
+		operationState = STATE_USB;
+	}
+	if (!usbNow && usbPrev && operationState == STATE_USB) {
+		operationState = STATE_SETUP;
+	}
+	usbPrev = usbNow;
+#endif
+
 	if (forceNewOpState != 0xFFFFFFFFUL) {
 		operationState = forceNewOpState;
 		lastState = forceNewOpState;
@@ -246,15 +263,37 @@ void __not_in_flash_func(runOperationSm)() {
 	}
 	u32 opStateTime = opStateTimer;
 	switch (operationState) {
+	case STATE_USB: {
+		// Service mode: hard-disable any firing and keep everything safe.
+		// NOTE: We don't early-return from runOperationSm; we still want the common
+		// tail logic (sendThrottles, state timers, etc.).
+		if (firstRun) {
+			dischargePusher();
+			retractPusher();
+		}
+		triggerUpdateFlag = false;
+		setAllThrottles(0);
+	} break;
 	case STATE_SETUP: {
 		static i32 goodSequences = -8;
 		static u8 goodSequenceProgress = 0;
 		static u8 edtProgress = 0;
 		static u8 bootGraceTimeProgress = 0;
 		static elapsedMillis escCheckTimer = 0;
+		static bool printedEdtMsg = false;
+		static bool printedTrigMsg = false;
 #if HW_VERSION == 2
 		if (firstRun) {
 			ledSetMode(LED_MODE::RAINBOW, LIGHT_ID::BOOT, 10000);
+			// Re-entering setup (e.g. after USB service mode): restart the setup gating so
+			// ESC comm/EDT gets re-established cleanly.
+			goodSequences = -8;
+			goodSequenceProgress = 0;
+			edtProgress = 0;
+			bootGraceTimeProgress = 0;
+			escCheckTimer = 0;
+			printedEdtMsg = false;
+			printedTrigMsg = false;
 		}
 #endif
 		// After 3 good sequences (total 1.5s), we can move on. A good sequence has at least one successful bidir dshot response like status
@@ -286,7 +325,6 @@ void __not_in_flash_func(runOperationSm)() {
 			gestureUpdated = false;
 			edtProgress = 0;
 			bool escStatusOk = true;
-			static bool printedEdtMsg = false;
 			for (u8 i = 0; i < 4; i++) {
 				if (escStatusCount[i] >= 2)
 					edtProgress += 8;
@@ -297,7 +335,6 @@ void __not_in_flash_func(runOperationSm)() {
 				addBootMsg("EDT found");
 				printedEdtMsg = true;
 			}
-			static bool printedTrigMsg = false;
 			if (
 				goodSequences >= 6 && bootTimer > 3000 && !triggerState && escStatusOk) {
 				operationState = bootUnlockNeeded ? STATE_SAFE : STATE_OFF;

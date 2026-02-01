@@ -94,6 +94,7 @@ void setup() {
 	DEBUG_PRINTSLN("Setup done");
 #if HW_VERSION == 2
 	playStartupSound();
+	usbSessionInit();
 #endif
 }
 
@@ -107,6 +108,7 @@ void loop() {
 #endif
 	batLoop();
 #if HW_VERSION == 2
+	usbSessionLoop0();
 	if (!speakerLoopOnFastCore && !speakerLoopOnFastCore2)
 		speakerLoop();
 	ledLoop();
@@ -123,7 +125,7 @@ void loop() {
 #if HW_VERSION == 2
 	mlLogSlowLoop();
 	{
-		const bool enable = (idleEnabled == 8 || idleEnabled == 9) && !mlLogIsActive();
+		const bool enable = (idleEnabled == 8 || idleEnabled == 9) && !mlLogIsActive() && !usbCdcActive();
 		const MlModel model = (idleEnabled == 8) ? ML_MODEL_LOGREG : ML_MODEL_MLP;
 		mlInferSlowLoop(enable, model);
 	}

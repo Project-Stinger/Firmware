@@ -98,6 +98,8 @@ static size_t expectedPayloadBytes(u8 modelType) {
 	return floats * sizeof(float);
 }
 
+static bool loadUserModelFromPath(const char *path, bool expectType, u8 expectedType);
+
 static void loadDefaultsIntoRam() {
 	memcpy(gLrMean, mlLrScalerMean, sizeof(gLrMean));
 	memcpy(gLrScale, mlLrScalerScale, sizeof(gLrScale));
@@ -149,6 +151,17 @@ void mlInferInit() {
 	__atomic_store_n(&cachedProbUpdatedMs, 0, __ATOMIC_RELAXED);
 
 	loadDefaultsIntoRam();
+
+	// Auto-load user models from LittleFS if they were uploaded in a previous session.
+	if (LittleFS.exists(ML_MODEL_LR_FILENAME))
+		loadUserModelFromPath(ML_MODEL_LR_FILENAME, true, 0);
+	if (LittleFS.exists(ML_MODEL_MLP_FILENAME))
+		loadUserModelFromPath(ML_MODEL_MLP_FILENAME, true, 1);
+	if (!gUserHasLR && !gUserHasMLP && LittleFS.exists(ML_MODEL_FILENAME))
+		loadUserModelFromPath(ML_MODEL_FILENAME, false, 0);
+
+	if (gUsingUserModel)
+		Serial.println("[ml] user model loaded from flash");
 }
 
 void mlInferPushSample(i16 ax, i16 ay, i16 az, i16 gx, i16 gy, i16 gz) {
@@ -525,6 +538,11 @@ void mlInferPrintInfo() {
 	Serial.printf("[ml] user_has_lr=%d\n", gUserHasLR ? 1 : 0);
 	Serial.printf("[ml] user_has_mlp=%d\n", gUserHasMLP ? 1 : 0);
 	Serial.printf("[ml] cached_age_ms=%lu\n", (u32)mlInferCachedAgeMs());
+	// Weight fingerprint for debugging (compare with Python export output).
+	Serial.printf("[ml] lr_intercept=%.6f\n", (double)gLrIntercept);
+	Serial.printf("[ml] lr_coef[0]=%.6f\n", (double)gLrCoef[0]);
+	Serial.printf("[ml] mlp_b3=%.6f\n", (double)gMlpB3);
+	Serial.printf("[ml] mlp_w1[0]=%.6f\n", (double)gMlpW1[0]);
 }
 
 #endif // HW_VERSION == 2

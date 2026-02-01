@@ -58,6 +58,7 @@
 #include "utils/fixedPointInt.h"
 #include "utils/quaternion.h"
 #include "utils/typedefs.h"
+#include "usbSession.h"
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <PIO_DShot.h>

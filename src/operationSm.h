@@ -89,7 +89,8 @@ enum OperationState {
 	STATE_RAMPDOWN, // motors on, ramping down
 	STATE_JOYSTICK_CAL, // calibrate joystick
 	STATE_FALL_DETECTED, // fall detected
-	STATE_BOOT_SELECT // select the boot mode: normal, joystick calibration, update, ...
+	STATE_BOOT_SELECT, // select the boot mode: normal, joystick calibration, update, ...
+	STATE_USB // USB connected: safe service mode (motors/pusher off)
 };
 
 void runOperationSm();
