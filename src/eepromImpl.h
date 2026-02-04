@@ -31,6 +31,11 @@ enum EepromPos {
 #endif
 	EEPROM_POS_REV_AFTER_FIRE = 42,
 	EEPROM_POS_BURST_KEEP_FIRE = 44,
+#if HW_VERSION == 2
+	// ML idle (profile dependent)
+	EEPROM_POS_ML_IDLE_MODE = 45, // u8: 0=binary, 1=dynamic RPM
+	EEPROM_POS_ML_THRESHOLD_PCT = 46, // u8: probability threshold in percent (e.g. 50 => 0.50)
+#endif
 
 	// EEPROM metadata start at 2000
 	EEPROM_INFO_START = 2000,

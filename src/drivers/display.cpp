@@ -411,6 +411,58 @@ void displayLoop() {
 		}
 		firstRun = true;
 	}
+
+#if HW_VERSION == 2
+#ifdef USE_TINYUSB
+	// While connected to USB, show a dedicated screen so it's obvious the blaster is
+	// plugged in, and display the ML log flash usage.
+	{
+		static bool usbWasActive = false;
+		const bool usbActive = usbCdcActive();
+		if (usbActive && state != STATE_SETUP) {
+			static u8 lastPct = 255;
+			static elapsedMillis usbUiTimer = 1000;
+			if (!usbWasActive) {
+				usbWasActive = true;
+				lastPct = 255;
+				usbUiTimer = 1000;
+				tft.fillScreen(ST77XX_BLACK);
+				SET_DEFAULT_FONT;
+				tft.setTextColor(ST77XX_YELLOW);
+				printCentered("USB", SCREEN_WIDTH / 2, 18, SCREEN_WIDTH, 1, 0, ClipBehavior::PRINT_LAST_LINE_CENTERED);
+				tft.setTextColor(ST77XX_WHITE);
+				printCentered("Connected", SCREEN_WIDTH / 2, 38, SCREEN_WIDTH, 1, 0, ClipBehavior::PRINT_LAST_LINE_CENTERED);
+
+				// Draw initial log fullness immediately.
+				const u8 pct = mlLogFlashPercent();
+				lastPct = pct;
+				char buf[32];
+				snprintf(buf, sizeof(buf), "Log: %d%% full", pct);
+				tft.setTextColor(ST77XX_CYAN);
+				printCentered(buf, SCREEN_WIDTH / 2, 110, SCREEN_WIDTH, 1, 0, ClipBehavior::PRINT_LAST_LINE_CENTERED);
+			}
+			if (usbUiTimer > 250) {
+				usbUiTimer = 0;
+				const u8 pct = mlLogFlashPercent();
+				if (pct != lastPct) {
+					lastPct = pct;
+					char buf[32];
+					snprintf(buf, sizeof(buf), "Log: %d%% full", pct);
+					tft.fillRect(0, 104, SCREEN_WIDTH, 16, ST77XX_BLACK);
+					tft.setTextColor(ST77XX_CYAN);
+					printCentered(buf, SCREEN_WIDTH / 2, 110, SCREEN_WIDTH, 1, 0, ClipBehavior::PRINT_LAST_LINE_CENTERED);
+				}
+			}
+			return;
+		}
+		if (usbWasActive && !usbActive) {
+			usbWasActive = false;
+			triggerFullRedraw();
+		}
+	}
+#endif
+#endif
+
 	switch (state) {
 	case STATE_SETUP: {
 #if HW_VERSION == 2
@@ -685,6 +737,66 @@ void displayLoop() {
 			tft.setTextColor(lastDcUpdating ? ((ST7735_WHITE >> 1) & 0b0111101111101111) : ST7735_WHITE);
 			tft.print(buf);
 		}
+
+#if HW_VERSION == 2
+		// print ML log percentage indicator
+		{
+			static elapsedMillis mlUpdateTimer = 1000;
+			static char lastMlStr[8] = "";
+			static u16 lastColor = 0;
+#ifdef USE_TINYUSB
+			static bool lastUsbActive = false;
+#endif
+			u32 periodMs = 1000;
+			if (!mlLogIsActive()) {
+				u8 pct = 0;
+				if (mlIdleGetConfidencePct(&pct)) periodMs = 200;
+			}
+			if (mlUpdateTimer > periodMs) {
+				mlUpdateTimer = 0;
+				char mlStr[8] = "";
+				if (mlLogIsActive()) {
+					if (mlLogIsPaused()) {
+						snprintf(mlStr, sizeof(mlStr), "P%d%%", mlLogFlashPercent());
+						lastColor = ST77XX_YELLOW;
+					} else {
+						snprintf(mlStr, sizeof(mlStr), "R%d%%", mlLogFlashPercent());
+						lastColor = ST77XX_RED;
+					}
+				} else {
+					u8 pct = 0;
+					if (mlIdleGetConfidencePct(&pct)) {
+						snprintf(mlStr, sizeof(mlStr), "%d%%", pct);
+						lastColor = ST77XX_CYAN;
+					}
+				}
+
+#ifdef USE_TINYUSB
+				const bool usbNow = usbSessionActive();
+				const bool usbChanged = (usbNow != lastUsbActive);
+				lastUsbActive = usbNow;
+#else
+				const bool usbChanged = false;
+#endif
+				if (strcmp(mlStr, lastMlStr) != 0) {
+					SET_DEFAULT_FONT;
+					speakerLoopOnFastCore = true;
+					// erase old
+					tft.fillRect(95, 0, 60, YADVANCE, HOME_BACKGROUND_COLOR);
+					if (mlStr[0]) {
+						tft.setCursor(105, 0);
+						tft.setTextColor(lastColor);
+						tft.print(mlStr);
+					}
+					strcpy(lastMlStr, mlStr);
+				}
+
+#ifdef USE_TINYUSB
+				(void)usbChanged;
+#endif
+			}
+		}
+#endif
 
 		// print or erase joystick lockout message
 		if (joystickLockout != lastJoystickLockout) {

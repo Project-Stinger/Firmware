@@ -10,26 +10,13 @@ extern bool idleOnlyWithMag;
 extern bool idleEnabled;
 #elif HW_VERSION == 2
 extern u8 idleEnabled;
-const char idleStrings[8][9] = {
-	"Off",
-	"Always",
-	"+/- 10°",
-	"+/- 15°",
-	"+/- 20°",
-	"+/- 25°",
-	"+/- 30°",
-	"+/- 35°",
-};
+extern u8 mlIdleMode;
+extern u8 mlThresholdPct;
 extern u8 maxFireAngleSetting;
-const char fireAngleStrings[6][9] = {
-	"40°",
-	"50°",
-	"60°",
-	"70°",
-	"80°",
-	"No limit",
-};
 extern fix32 actualDps;
+
+// UI helper: returns whether an ML confidence value is available and writes 0–100.
+bool mlIdleGetConfidencePct(u8 *outPct);
 #endif
 extern bool bootUnlockNeeded;
 extern u16 rampdownTime, rampupTimeout;
@@ -78,7 +65,8 @@ enum OperationState {
 	STATE_RAMPDOWN, // motors on, ramping down
 	STATE_JOYSTICK_CAL, // calibrate joystick
 	STATE_FALL_DETECTED, // fall detected
-	STATE_BOOT_SELECT // select the boot mode: normal, joystick calibration, update, ...
+	STATE_BOOT_SELECT, // select the boot mode: normal, joystick calibration, update, ...
+	STATE_USB // USB connected: safe service mode (motors/pusher off)
 };
 
 void runOperationSm();
