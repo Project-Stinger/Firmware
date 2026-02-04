@@ -12,7 +12,7 @@ PT1 rpmFilter[4] = {PT1(RPM_FILTER_CUTOFF, PID_RATE), PT1(RPM_FILTER_CUTOFF, PID
 PT3 dFilter[4] = {PT3(RPM_D_FILTER_CUTOFF, PID_RATE), PT3(RPM_D_FILTER_CUTOFF, PID_RATE), PT3(RPM_D_FILTER_CUTOFF, PID_RATE), PT3(RPM_D_FILTER_CUTOFF, PID_RATE)};
 fix32 rpmPGain = 0, rpmIGain = 0, rpmDGain = 0;
 fix32 rpmError[4] = {0, 0, 0, 0};
-u8 minThrottle = 14;
+u8 minThrottle = 40;
 u8 rpmThresPct = 10;
 fix64 rpmErrorSumLimit = 0;
 bool iTermSet[4] = {false, false, false, false};

@@ -27,7 +27,7 @@ static constexpr u16 ML_INFER_INTERVAL = (PID_RATE / ML_INFER_HZ) ? (PID_RATE / 
 // Envelope follower (fast attack, slow release). This avoids the "I-term spool" feel:
 // - spin up quickly and consistently when the model is confident
 // - relax more slowly to avoid chattering
-static constexpr float ML_IDLE_ALPHA_UP = 0.18f;   // ~50ms attack @ 100Hz
+static constexpr float ML_IDLE_ALPHA_UP = 0.18f; // ~50ms attack @ 100Hz
 static constexpr float ML_IDLE_ALPHA_DOWN = 0.03f; // ~330ms release @ 100Hz
 static i32 mlIdleTargetRpm = 0;
 static bool mlIdleProbValid = false;
@@ -268,7 +268,6 @@ void __not_in_flash_func(runOperationSm)() {
 		// NOTE: We don't early-return from runOperationSm; we still want the common
 		// tail logic (sendThrottles, state timers, etc.).
 		if (firstRun) {
-			dischargePusher();
 			retractPusher();
 		}
 		triggerUpdateFlag = false;

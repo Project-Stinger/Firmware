@@ -739,63 +739,63 @@ void displayLoop() {
 		}
 
 #if HW_VERSION == 2
-			// print ML log percentage indicator
-			{
-				static elapsedMillis mlUpdateTimer = 1000;
-				static char lastMlStr[8] = "";
-				static u16 lastColor = 0;
-			#ifdef USE_TINYUSB
-				static bool lastUsbActive = false;
-			#endif
-				u32 periodMs = 1000;
-				if (!mlLogIsActive()) {
-					u8 pct = 0;
-					if (mlIdleGetConfidencePct(&pct)) periodMs = 200;
-				}
-				if (mlUpdateTimer > periodMs) {
-					mlUpdateTimer = 0;
-					char mlStr[8] = "";
-					if (mlLogIsActive()) {
-						if (mlLogIsPaused()) {
-							snprintf(mlStr, sizeof(mlStr), "P%d%%", mlLogFlashPercent());
-							lastColor = ST77XX_YELLOW;
-						} else {
-							snprintf(mlStr, sizeof(mlStr), "R%d%%", mlLogFlashPercent());
-							lastColor = ST77XX_RED;
-						}
-					} else {
-						u8 pct = 0;
-						if (mlIdleGetConfidencePct(&pct)) {
-							snprintf(mlStr, sizeof(mlStr), "%d%%", pct);
-							lastColor = ST77XX_CYAN;
-						}
-					}
-
-				#ifdef USE_TINYUSB
-					const bool usbNow = usbSessionActive();
-					const bool usbChanged = (usbNow != lastUsbActive);
-					lastUsbActive = usbNow;
-				#else
-					const bool usbChanged = false;
-				#endif
-					if (strcmp(mlStr, lastMlStr) != 0) {
-						SET_DEFAULT_FONT;
-						speakerLoopOnFastCore = true;
-						// erase old
-						tft.fillRect(95, 0, 60, YADVANCE, HOME_BACKGROUND_COLOR);
-						if (mlStr[0]) {
-							tft.setCursor(105, 0);
-							tft.setTextColor(lastColor);
-							tft.print(mlStr);
-						}
-						strcpy(lastMlStr, mlStr);
-					}
-
-				#ifdef USE_TINYUSB
-					(void)usbChanged;
-				#endif
-				}
+		// print ML log percentage indicator
+		{
+			static elapsedMillis mlUpdateTimer = 1000;
+			static char lastMlStr[8] = "";
+			static u16 lastColor = 0;
+#ifdef USE_TINYUSB
+			static bool lastUsbActive = false;
+#endif
+			u32 periodMs = 1000;
+			if (!mlLogIsActive()) {
+				u8 pct = 0;
+				if (mlIdleGetConfidencePct(&pct)) periodMs = 200;
 			}
+			if (mlUpdateTimer > periodMs) {
+				mlUpdateTimer = 0;
+				char mlStr[8] = "";
+				if (mlLogIsActive()) {
+					if (mlLogIsPaused()) {
+						snprintf(mlStr, sizeof(mlStr), "P%d%%", mlLogFlashPercent());
+						lastColor = ST77XX_YELLOW;
+					} else {
+						snprintf(mlStr, sizeof(mlStr), "R%d%%", mlLogFlashPercent());
+						lastColor = ST77XX_RED;
+					}
+				} else {
+					u8 pct = 0;
+					if (mlIdleGetConfidencePct(&pct)) {
+						snprintf(mlStr, sizeof(mlStr), "%d%%", pct);
+						lastColor = ST77XX_CYAN;
+					}
+				}
+
+#ifdef USE_TINYUSB
+				const bool usbNow = usbSessionActive();
+				const bool usbChanged = (usbNow != lastUsbActive);
+				lastUsbActive = usbNow;
+#else
+				const bool usbChanged = false;
+#endif
+				if (strcmp(mlStr, lastMlStr) != 0) {
+					SET_DEFAULT_FONT;
+					speakerLoopOnFastCore = true;
+					// erase old
+					tft.fillRect(95, 0, 60, YADVANCE, HOME_BACKGROUND_COLOR);
+					if (mlStr[0]) {
+						tft.setCursor(105, 0);
+						tft.setTextColor(lastColor);
+						tft.print(mlStr);
+					}
+					strcpy(lastMlStr, mlStr);
+				}
+
+#ifdef USE_TINYUSB
+				(void)usbChanged;
+#endif
+			}
+		}
 #endif
 
 		// print or erase joystick lockout message

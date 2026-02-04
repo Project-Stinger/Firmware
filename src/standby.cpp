@@ -1,19 +1,19 @@
-	#include "global.h"
+#include "global.h"
 
-	#if HW_VERSION == 2
+#if HW_VERSION == 2
 
-	bool standbyOn = false;
-	bool enableStandbyFlag = false;
-	bool fastStandbyEnabled = true;
+bool standbyOn = false;
+bool enableStandbyFlag = false;
+bool fastStandbyEnabled = true;
 
-	static inline bool usbMounted() {
-	#ifdef USE_TINYUSB
-		// Core 1 must not call TinyUSB/Serial internals directly (thread-safety).
-		return usbSessionActive();
-	#else
-		return false;
-	#endif
-	}
+static inline bool usbMounted() {
+#ifdef USE_TINYUSB
+	// Core 1 must not call TinyUSB/Serial internals directly (thread-safety).
+	return usbSessionActive();
+#else
+	return false;
+#endif
+}
 
 elapsedMillis noMotionTimer = 0;
 elapsedMillis standbyBeepTimer = 0;
@@ -27,16 +27,16 @@ void initStandbySwitch() {
 	gpio_put(PIN_STANDBY, 0);
 }
 
-	void standbyOnLoop() {
-		// If the device is connected over USB, keep it awake.
-		if (usbMounted()) {
-			disableStandby();
-			return;
-		}
-		if (triggerState && triggerUpdateFlag) {
-			triggerUpdateFlag = false;
-			disableStandby();
-		}
+void standbyOnLoop() {
+	// If the device is connected over USB, keep it awake.
+	if (usbMounted()) {
+		disableStandby();
+		return;
+	}
+	if (triggerState && triggerUpdateFlag) {
+		triggerUpdateFlag = false;
+		disableStandby();
+	}
 	if (gpio_get(PIN_GYRO_INT)) {
 		if (noMotionTimer > 30000) // prevent turning back while it is still moving, only enable motion detection after 30s
 			disableStandby();
@@ -67,17 +67,17 @@ void initStandbySwitch() {
 	}
 }
 
-	void standbyOffLoop() {
-		// If the device is connected over USB, keep it awake.
-		if (usbMounted()) {
-			inactivityTimer = 0;
-			noMotionTimer = 0;
-			return;
-		}
-		if (gpio_get(PIN_GYRO_INT)) {
-			// if blaster is moving, reset timer
-			noMotionTimer = 0;
-		}
+void standbyOffLoop() {
+	// If the device is connected over USB, keep it awake.
+	if (usbMounted()) {
+		inactivityTimer = 0;
+		noMotionTimer = 0;
+		return;
+	}
+	if (gpio_get(PIN_GYRO_INT)) {
+		// if blaster is moving, reset timer
+		noMotionTimer = 0;
+	}
 	if (inactivityTimeout && inactivityTimer > 1000 * 60 * inactivityTimeout) {
 		enableStandby();
 	}

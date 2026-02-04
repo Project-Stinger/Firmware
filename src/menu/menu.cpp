@@ -12,11 +12,33 @@ char profileName[16] = "Profile";
 u8 profileColor[3] = {255, 255, 255};
 u16 profileColor565 = 0xFFFF;
 bool extendedRpmRange = false;
+
 #if HW_VERSION == 2
-	static char mlRecordingStatusStr[32] = "ML Recording: OFF";
-	static MenuItem *mlRecordingStatusItem = nullptr;
-	static MenuItem *mlRecordingStartItem = nullptr;
-	static MenuItem *mlRecordingStopItem = nullptr;
+char mlRecordingStatusStr[32] = "ML Recording: OFF";
+MenuItem *mlRecordingStatusItem = new MenuItem(MenuItemType::INFO, "mlRecordingStatus", mlRecordingStatusStr);
+MenuItem *mlRecordingStartItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStart", "Start ML Recording", "Start recording IMU data to flash for ML training datasets");
+MenuItem *mlRecordingStopItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStop", "Stop ML Recording", "Stop recording (flushes remaining buffered samples when safe)");
+const char mlIdleModeStrings[2][9] = {"Binary", "Dynamic"};
+const char idleStrings[10][9] = {
+	"Off",
+	"Always",
+	"+/- 10°",
+	"+/- 15°",
+	"+/- 20°",
+	"+/- 25°",
+	"+/- 30°",
+	"+/- 35°",
+	"ML:LR",
+	"ML:MLP",
+};
+const char fireAngleStrings[6][9] = {
+	"40°",
+	"50°",
+	"60°",
+	"70°",
+	"80°",
+	"No limit",
+};
 #endif
 
 u8 rotationTickSensitivity = 0;
@@ -207,7 +229,7 @@ void initMenu() {
 #if HW_VERSION == 1
 		->addChild(new MenuItem(&idleEnabled, false, EEPROM_POS_IDLE_ENABLED, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
 #elif HW_VERSION == 2
-		->addChild(new MenuItem(&idleEnabled, 9, EEPROM_POS_IDLE_ENABLED, 9, (const char *)idleStrings, 9, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+		->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 9, (const char *)idleStrings, 9, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
 		->addChild(new MenuItem(&mlIdleMode, 1, EEPROM_POS_ML_IDLE_MODE, 1, (const char *)mlIdleModeStrings, 9, true, "mlIdleMode", "ML Idle Mode", "Binary = idle on/off. Dynamic = scale RPM with model probability."))
 		->addChild(new MenuItem(VariableType::U8, &mlThresholdPct, 50, 1, 5, 95, 1, 0, EEPROM_POS_ML_THRESHOLD_PCT, true, "mlThresh", "ML Threshold %", "Probability threshold. Lower = earlier/more aggressive idling."))
 #endif
@@ -227,7 +249,7 @@ void initMenu() {
 		->addChild(motorExpertMenu);
 	MenuItem *motorExpertPage2 = new MenuItem(MenuItemType::SUBMENU, "motorExpertPage2", "Next Page");
 	motorExpertMenu
-		->addChild(new MenuItem(VariableType::U8, &minThrottle, 14, 2, 0, 200, 20, 1, EEPROM_POS_MIN_THROTTLE, false, "minThrottle", "Min Throttle %", "Minimum throttle for the motors to run at (unless they are off), e.g. to overcome glitching at low throttle. Overrides whatever the PID says."))
+		->addChild(new MenuItem(VariableType::U8, &minThrottle, 40, 2, 0, 200, 20, 1, EEPROM_POS_MIN_THROTTLE, false, "minThrottle", "Min Throttle %", "Minimum throttle for the motors to run at (unless they are off), e.g. to overcome glitching at low throttle. Overrides whatever the PID says."))
 		->addChild(new MenuItem(VariableType::I16, &pGainNice, DEFAULT_PID_P, 1, 0, 500, 1, 0, EEPROM_POS_PID_P, false, "pGain", "P Gain", "Proportional Gain for the PID controller, higher values make the system react faster but can lead to oscillations and overshoot"))
 		->addChild(new MenuItem(VariableType::I16, &iGainNice, DEFAULT_PID_I, 1, 0, 500, 1, 0, EEPROM_POS_PID_I, false, "iGain", "I Gain", "Integral Gain for the PID controller, higher values make the system react faster to long term errors and new setpoints but can lead to overshoot and low frequency oscillations"))
 		->addChild(new MenuItem(VariableType::I16, &dGainNice, DEFAULT_PID_D, 1, 0, 500, 1, 0, EEPROM_POS_PID_D, false, "dGain", "D Gain", "Derivative Gain for the PID controller, higher values can reduce overshoot and oscillations but can lead to noise amplification, i.e. hot motors, and instability"))
@@ -320,8 +342,8 @@ void initMenu() {
 		->addChild(new MenuItem(VariableType::U8, &copyToProfile, 1, 1, 1, MAX_PROFILE_COUNT, 1, 0, EEPROM_RUNTIME_OPTION, false, "swapProfile", "Swap with "))
 		->addChild(new MenuItem(MenuItemType::ACTION, "swapProfileAction", "Swap"));
 
-		// ======================== Device Menu ========================
-		MenuItem *deviceMenu = new MenuItem(MenuItemType::SUBMENU, "device", "Device");
+	// ======================== Device Menu ========================
+	MenuItem *deviceMenu = new MenuItem(MenuItemType::SUBMENU, "device", "Device");
 	MenuItem *bootScreen = new MenuItem(MenuItemType::SUBMENU, "bootScreen", "Boot Screen");
 	MenuItem *safetyMenu = new MenuItem(MenuItemType::SUBMENU, "safetyMenu", "Safety");
 	MenuItem *hardwareMenu = new MenuItem(MenuItemType::SUBMENU, "hardwareMenu", "Hardware Setup");
@@ -331,19 +353,18 @@ void initMenu() {
 	MenuItem *escTempCalibration = new MenuItem(MenuItemType::SUBMENU, "escTempCalibration", "ESC Temp Calibration");
 	MenuItem *firmwareInfoMenu = new MenuItem(MenuItemType::SUBMENU, "firmwareInfoMenu", "Firmware Info");
 	MenuItem *resetMenu = new MenuItem(MenuItemType::SUBMENU, "resetMenu", "Factory Reset");
-		deviceMenu
+	deviceMenu
 		->addChild(bootScreen)
 		->addChild(safetyMenu)
 		->addChild(hardwareMenu)
 		->addChild(new MenuItem(MenuItemType::CUSTOM, "docs", "Documentation"))
 		->addChild(firmwareInfoMenu)
-		->addChild(resetMenu)
-	#if HW_VERSION == 2
-			->addChild((mlRecordingStatusItem = new MenuItem(MenuItemType::INFO, "mlRecordingStatus", mlRecordingStatusStr)))
-			->addChild((mlRecordingStartItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStart", "Start ML Recording", "Start recording IMU data to flash for ML training datasets")))
-			->addChild((mlRecordingStopItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStop", "Stop ML Recording", "Stop recording (flushes remaining buffered samples when safe)")))
-	#endif
-			;
+#if HW_VERSION == 2
+		->addChild(mlRecordingStatusItem)
+		->addChild(mlRecordingStartItem)
+		->addChild(mlRecordingStopItem)
+#endif
+		->addChild(resetMenu);
 	bootScreen
 		->addChild(new MenuItem(deviceName, 16, "Stinger", EEPROM_POS_DEVICE_NAME, false, "deviceName", "Device Name"))
 		->addChild(new MenuItem(ownerName, 32, "John Doe", EEPROM_POS_OWNER_NAME, false, "ownerName", "Owner"))
@@ -517,41 +538,41 @@ void initMenu() {
 	mainMenu->search("enterTournamentMode")
 		->setOnEnterFunction(enableTournamentMode)
 		->setVisible(false);
-	#if HW_VERSION == 2
-		if (mlRecordingStartItem) {
-			mlRecordingStartItem->setOnEnterFunction([](MenuItem *_item) -> bool {
-				mlLogStartRecording();
-				return false;
-			});
-		}
-		if (mlRecordingStopItem) {
-			mlRecordingStopItem->setOnEnterFunction([](MenuItem *_item) -> bool {
-				mlLogStopRecording();
-				return false;
-			});
-		}
-		deviceMenu->setCustomLoop([](MenuItem *item) -> bool {
-			static bool initialized = false;
-			static bool lastActive = false;
-			const bool active = mlLogIsActive();
-			if (!initialized) {
-				initialized = true;
-				lastActive = !active; // force first update
-			}
-			if (active != lastActive) {
-				lastActive = active;
-				snprintf(mlRecordingStatusStr, sizeof(mlRecordingStatusStr), "ML Recording: %s", active ? "ON" : "OFF");
-				if (mlRecordingStartItem) mlRecordingStartItem->setVisible(!active);
-				if (mlRecordingStopItem) mlRecordingStopItem->setVisible(active);
-				item->triggerFullRedraw();
-			}
-			return true;
+#if HW_VERSION == 2
+	if (mlRecordingStartItem) {
+		mlRecordingStartItem->setOnEnterFunction([](MenuItem *_item) -> bool {
+			mlLogStartRecording();
+			return false;
 		});
-		mainMenu->search("ledBrightness")
-			->setOnEnterFunction(onBrightnessEnter)
-			->setOnExitFunction(onBrightnessExit)
-			->setOnChangeFunction(onBrightnessChange);
-	#endif
+	}
+	if (mlRecordingStopItem) {
+		mlRecordingStopItem->setOnEnterFunction([](MenuItem *_item) -> bool {
+			mlLogStopRecording();
+			return false;
+		});
+	}
+	deviceMenu->setCustomLoop([](MenuItem *item) -> bool {
+		static bool initialized = false;
+		static bool lastActive = false;
+		const bool active = mlLogIsActive();
+		if (!initialized) {
+			initialized = true;
+			lastActive = !active; // force first update
+		}
+		if (active != lastActive) {
+			lastActive = active;
+			snprintf(mlRecordingStatusStr, sizeof(mlRecordingStatusStr), "ML Recording: %s", active ? "ON" : "OFF");
+			if (mlRecordingStartItem) mlRecordingStartItem->setVisible(!active);
+			if (mlRecordingStopItem) mlRecordingStopItem->setVisible(active);
+			item->triggerFullRedraw();
+		}
+		return true;
+	});
+	mainMenu->search("ledBrightness")
+		->setOnEnterFunction(onBrightnessEnter)
+		->setOnExitFunction(onBrightnessExit)
+		->setOnChangeFunction(onBrightnessChange);
+#endif
 	loadSettings();
 	MenuItem::settingsAreInEeprom = true;
 

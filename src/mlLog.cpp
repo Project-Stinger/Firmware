@@ -3,8 +3,8 @@
 #if HW_VERSION == 2
 
 #include <LittleFS.h>
-#include <cstring>
 #include <algorithm>
+#include <cstring>
 
 // 1600 Hz gyro rate / 16 = 100 Hz output.
 constexpr u32 ML_LOG_DECIMATION = 16;
@@ -49,7 +49,7 @@ static bool fsReady = false;
 static File logFile;
 static volatile bool logActive = false; // set in init, cleared on full/error
 static volatile bool logPausedStill = false; // set on core 1
-static volatile bool logPausedUsb = false;   // set on core 0 when USB session active
+static volatile bool logPausedUsb = false; // set on core 0 when USB session active
 static bool logFullWarned = false;
 static u32 sampleCountWritten = 0;
 static u8 decim = 0;
@@ -271,12 +271,12 @@ void mlLogLoop() {
 
 	// Auto-pause logging while completely still to save flash and keep datasets cleaner.
 	// Uses per-sample deltas (not absolute accel magnitude) so gravity doesn't matter.
-	constexpr i32 STILL_DELTA = 30;            // raw i16 delta threshold (noise tolerant)
-	constexpr i32 UNPAUSE_DELTA = 140;         // hysteresis (harder to resume)
-	constexpr i32 STILL_GYRO_ABS = 45;         // gyro near-zero threshold
-	constexpr i32 UNPAUSE_GYRO_ABS = 240;      // gyro threshold to resume even if deltas are small
+	constexpr i32 STILL_DELTA = 30; // raw i16 delta threshold (noise tolerant)
+	constexpr i32 UNPAUSE_DELTA = 140; // hysteresis (harder to resume)
+	constexpr i32 STILL_GYRO_ABS = 45; // gyro near-zero threshold
+	constexpr i32 UNPAUSE_GYRO_ABS = 240; // gyro threshold to resume even if deltas are small
 	constexpr u32 STILL_SAMPLES_TO_PAUSE = 50; // ~0.50s @ 100Hz
-	constexpr u32 UNPAUSE_SAMPLES = 10;        // require sustained motion to resume
+	constexpr u32 UNPAUSE_SAMPLES = 10; // require sustained motion to resume
 	static bool haveLast = false;
 	static i16 lastAx = 0, lastAy = 0, lastAz = 0, lastGx = 0, lastGy = 0, lastGz = 0;
 	static u32 stillCount = 0;
@@ -296,8 +296,12 @@ void mlLogLoop() {
 	// and reset stillness tracking when logging starts.
 	if (!haveLast) {
 		haveLast = true;
-		lastAx = s.ax; lastAy = s.ay; lastAz = s.az;
-		lastGx = s.gx; lastGy = s.gy; lastGz = s.gz;
+		lastAx = s.ax;
+		lastAy = s.ay;
+		lastAz = s.az;
+		lastGx = s.gx;
+		lastGy = s.gy;
+		lastGz = s.gz;
 		stillCount = 0;
 		logPausedStill = false;
 	} else {
@@ -310,8 +314,12 @@ void mlLogLoop() {
 		maxDelta = std::max(maxDelta, iabs((i32)s.gy - (i32)lastGy));
 		maxDelta = std::max(maxDelta, iabs((i32)s.gz - (i32)lastGz));
 
-		lastAx = s.ax; lastAy = s.ay; lastAz = s.az;
-		lastGx = s.gx; lastGy = s.gy; lastGz = s.gz;
+		lastAx = s.ax;
+		lastAy = s.ay;
+		lastAz = s.az;
+		lastGx = s.gx;
+		lastGy = s.gy;
+		lastGz = s.gz;
 
 		const bool gyroStill =
 			iabs((i32)s.gx) <= STILL_GYRO_ABS &&
@@ -447,7 +455,8 @@ void mlLogSlowLoop() {
 				u32 crc = ~modelRxCrc;
 				for (int i = 0; i < n; i++) {
 					u32 x = (crc ^ buf[i]) & 0xFFu;
-					for (u32 j = 0; j < 8; j++) x = (x >> 1) ^ (0xEDB88320u & (-(i32)(x & 1u)));
+					for (u32 j = 0; j < 8; j++)
+						x = (x >> 1) ^ (0xEDB88320u & (-(i32)(x & 1u)));
 					crc = (crc >> 8) ^ x;
 				}
 				modelRxCrc = ~crc;
@@ -505,17 +514,25 @@ void mlLogSlowLoop() {
 			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_INFO") == 0) {
 				mlInferPrintInfo();
 			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_LOAD") == 0) {
-				if (mlInferLoadUserModel()) Serial.println("[ml] MLMODEL_LOADED");
-				else Serial.println("[ml] MLMODEL_ERR load");
+				if (mlInferLoadUserModel())
+					Serial.println("[ml] MLMODEL_LOADED");
+				else
+					Serial.println("[ml] MLMODEL_ERR load");
 			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_LOAD_LR") == 0) {
-				if (mlInferLoadUserModelType(ML_MODEL_LOGREG)) Serial.println("[ml] MLMODEL_LOADED");
-				else Serial.println("[ml] MLMODEL_ERR load");
+				if (mlInferLoadUserModelType(ML_MODEL_LOGREG))
+					Serial.println("[ml] MLMODEL_LOADED");
+				else
+					Serial.println("[ml] MLMODEL_ERR load");
 			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_LOAD_MLP") == 0) {
-				if (mlInferLoadUserModelType(ML_MODEL_MLP)) Serial.println("[ml] MLMODEL_LOADED");
-				else Serial.println("[ml] MLMODEL_ERR load");
+				if (mlInferLoadUserModelType(ML_MODEL_MLP))
+					Serial.println("[ml] MLMODEL_LOADED");
+				else
+					Serial.println("[ml] MLMODEL_ERR load");
 			} else if (cmdLen && strcmp(cmdBuf, "MLMODEL_DELETE") == 0) {
-				if (mlInferDeleteUserModel()) Serial.println("[ml] MLMODEL_DELETED");
-				else Serial.println("[ml] MLMODEL_ERR delete");
+				if (mlInferDeleteUserModel())
+					Serial.println("[ml] MLMODEL_DELETED");
+				else
+					Serial.println("[ml] MLMODEL_ERR delete");
 			} else if (cmdLen && strncmp(cmdBuf, "MLMODEL_PUT ", 12) == 0) {
 				// Format: MLMODEL_PUT <size> <crc32hex>
 				// CRC is over the full file bytes.
@@ -605,34 +622,34 @@ void mlLogSlowLoop() {
 		}
 	}
 
-	flush_logic:
-		// While USB is active, do not perform background flash flushes.
-		// MLDUMP explicitly flushes/pauses for a consistent export.
-		if (usbNow) return;
-		// Never write to flash while firing / ramping, but still allow command parsing above so
-		// the host gets a deterministic response (busy/ready) instead of silence.
-		if (firing) return;
-		if ((!logActive && !stopRequested) || !fsReady) return;
-		if (!logFile) {
-			// If we were asked to stop but the file is already closed (e.g. full/error), clear the request.
-			if (stopRequested) {
-				stopRequested = false;
-				flushRequested = false;
-			}
-			return;
+flush_logic:
+	// While USB is active, do not perform background flash flushes.
+	// MLDUMP explicitly flushes/pauses for a consistent export.
+	if (usbNow) return;
+	// Never write to flash while firing / ramping, but still allow command parsing above so
+	// the host gets a deterministic response (busy/ready) instead of silence.
+	if (firing) return;
+	if ((!logActive && !stopRequested) || !fsReady) return;
+	if (!logFile) {
+		// If we were asked to stop but the file is already closed (e.g. full/error), clear the request.
+		if (stopRequested) {
+			stopRequested = false;
+			flushRequested = false;
 		}
+		return;
+	}
 
-		const u32 pending = spscCount();
-		if (!pending) {
-			if (stopRequested) {
-				logFile.flush();
-				logFile.close();
-				stopRequested = false;
-				flushRequested = false;
-				Serial.println("[ml] recording stopped");
-			}
-			return;
+	const u32 pending = spscCount();
+	if (!pending) {
+		if (stopRequested) {
+			logFile.flush();
+			logFile.close();
+			stopRequested = false;
+			flushRequested = false;
+			Serial.println("[ml] recording stopped");
 		}
+		return;
+	}
 
 	// Default behavior: buffer during normal use, then flush after a shot.
 	// Also flush if buffer gets close to full, to avoid dropping long idle segments.
@@ -644,15 +661,15 @@ void mlLogSlowLoop() {
 	// Drain in bounded chunks to keep core 0 responsive.
 	(void)mlLogFlushSome(32);
 
-		// Once we've started flushing post-shot, keep flushing until the buffer is mostly empty.
-		// This reduces flash activity between shots and keeps more contiguous pre-shot windows in RAM.
-		if (flushRequested && !stopRequested) {
-			constexpr u32 LOW_WATERMARK = SPSC_CAPACITY / 8;
-			if (spscCount() <= LOW_WATERMARK) {
-				flushRequested = false;
-			}
+	// Once we've started flushing post-shot, keep flushing until the buffer is mostly empty.
+	// This reduces flash activity between shots and keeps more contiguous pre-shot windows in RAM.
+	if (flushRequested && !stopRequested) {
+		constexpr u32 LOW_WATERMARK = SPSC_CAPACITY / 8;
+		if (spscCount() <= LOW_WATERMARK) {
+			flushRequested = false;
 		}
 	}
+}
 
 bool mlLogIsActive() {
 	return logActive;

@@ -13,4 +13,4 @@
 void usbSessionInit();
 void usbSessionLoop0(); // call from loop() (core 0)
 bool usbSessionActive(); // safe from both cores
-bool usbCdcActive();     // safe from both cores
+bool usbCdcActive(); // safe from both cores
