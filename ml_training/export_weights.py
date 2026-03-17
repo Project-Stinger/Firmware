@@ -6,20 +6,25 @@ Usage:
 
 Trains both models on the full dataset (no split) and exports:
   - StandardScaler mean/std
-  - LogisticRegression coef/intercept
-  - MLP weights/biases for (64, 32) architecture
+  - LogisticRegression coef/intercept (16 invariant features)
+  - MLP weights/biases for (64, 32) architecture (22 invariant-rich features)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
+
+# Import featurization from train.py (same directory).
+sys.path.insert(0, str(Path(__file__).parent))
+from train import featurize
 
 
 def load_dataset(train_dir: Path):
@@ -33,33 +38,6 @@ def load_dataset(train_dir: Path):
     if X.shape[0] != y.shape[0]:
         raise SystemExit(f"Mismatched rows: X={X.shape[0]} y={y.shape[0]}")
     return meta, X, y
-
-
-def featurize_rich(X: np.ndarray) -> np.ndarray:
-    mean = X.mean(axis=1)
-    std = X.std(axis=1)
-    mx = np.abs(X).max(axis=1)
-    absmean = np.abs(X).mean(axis=1)
-    a = X[:, :, 0:3]
-    g = X[:, :, 3:6]
-    amag = np.sqrt((a * a).sum(axis=2))
-    gmag = np.sqrt((g * g).sum(axis=2))
-    return np.concatenate([
-        mean, std, mx, absmean,
-        amag.mean(axis=1, keepdims=True),
-        amag.std(axis=1, keepdims=True),
-        amag.max(axis=1, keepdims=True),
-        gmag.mean(axis=1, keepdims=True),
-        gmag.std(axis=1, keepdims=True),
-        gmag.max(axis=1, keepdims=True),
-    ], axis=1)
-
-
-def featurize_summary(X: np.ndarray) -> np.ndarray:
-    mean = X.mean(axis=1)
-    std = X.std(axis=1)
-    mx = np.abs(X).max(axis=1)
-    return np.concatenate([mean, std, mx], axis=1)
 
 
 def fmt_array(name: str, arr: np.ndarray, cols: int = 6) -> str:
@@ -82,18 +60,23 @@ def main() -> None:
     meta, X, y = load_dataset(args.train_dir)
     window_samples = int(meta["window_samples"])
 
+    LR_FEATURES = 18
+    MLP_FEATURES = 30
+
     # --- Logistic Regression (summary features, 18-dim) ---
-    F_sum = featurize_summary(X)
-    scaler_lr = StandardScaler().fit(F_sum)
-    F_sum_s = scaler_lr.transform(F_sum)
+    F_lr = featurize(X, "summary")
+    assert F_lr.shape[1] == LR_FEATURES, f"Expected {LR_FEATURES} LR features, got {F_lr.shape[1]}"
+    scaler_lr = StandardScaler().fit(F_lr)
+    F_lr_s = scaler_lr.transform(F_lr)
     lr = LogisticRegression(max_iter=5000, random_state=args.seed)
-    lr.fit(F_sum_s, y)
-    print(f"LogReg train accuracy: {lr.score(F_sum_s, y):.3f}")
+    lr.fit(F_lr_s, y)
+    print(f"LogReg train accuracy: {lr.score(F_lr_s, y):.3f}")
 
     # --- MLP (rich features, 30-dim, hidden 64,32) ---
-    F_rich = featurize_rich(X)
-    scaler_mlp = StandardScaler().fit(F_rich)
-    F_rich_s = scaler_mlp.transform(F_rich)
+    F_mlp = featurize(X, "rich")
+    assert F_mlp.shape[1] == MLP_FEATURES, f"Expected {MLP_FEATURES} MLP features, got {F_mlp.shape[1]}"
+    scaler_mlp = StandardScaler().fit(F_mlp)
+    F_mlp_s = scaler_mlp.transform(F_mlp)
     mlp = MLPClassifier(
         hidden_layer_sizes=(64, 32),
         activation="relu",
@@ -104,8 +87,8 @@ def main() -> None:
         early_stopping=len(y) >= 80,
         n_iter_no_change=10,
     )
-    mlp.fit(F_rich_s, y)
-    print(f"MLP train accuracy: {mlp.score(F_rich_s, y):.3f}")
+    mlp.fit(F_mlp_s, y)
+    print(f"MLP train accuracy: {mlp.score(F_mlp_s, y):.3f}")
 
     # --- Generate C header ---
     lines = [
@@ -115,12 +98,12 @@ def main() -> None:
         "",
         f"#define ML_WINDOW_SAMPLES {window_samples}",
         f"#define ML_CHANNELS 6",
-        f"#define ML_LR_FEATURES 18   // summary: mean(6) + std(6) + absmax(6)",
-        f"#define ML_MLP_FEATURES 30  // rich: mean(6) + std(6) + absmax(6) + absmean(6) + mag_stats(6)",
+        f"#define ML_LR_FEATURES {LR_FEATURES}   // summary: mean(6) + std(6) + absmax(6)",
+        f"#define ML_MLP_FEATURES {MLP_FEATURES}  // rich: mean(6) + std(6) + absmax(6) + absmean(6) + mag_stats(6)",
         f"#define ML_MLP_H1 64",
         f"#define ML_MLP_H2 32",
         "",
-        "// === Logistic Regression (summary features) ===",
+        "// === Logistic Regression (invariant features) ===",
         "",
         fmt_array("mlLrScalerMean", scaler_lr.mean_),
         "",
@@ -130,7 +113,7 @@ def main() -> None:
         "",
         f"static const float mlLrIntercept = {lr.intercept_[0]:.8f}f;",
         "",
-        "// === MLP (rich features, 64->32->1) ===",
+        f"// === MLP (rich features, 64->32->1) ===",
         "",
         fmt_array("mlMlpScalerMean", scaler_mlp.mean_),
         "",

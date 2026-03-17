@@ -134,7 +134,9 @@ export function extractDataset(data, accepted, opts = {}) {
 
   // Far negative candidates
   const rng = makeRng(seed);
-  const negTarget = posWindows.length; // 1:1 ratio
+  // Target enough negatives to match augmented positives (5x raw due to jitter augmentation).
+  const augMultiplier = 5; // 1 original + 4 jitter variants per positive window
+  const negTarget = posWindows.length * augMultiplier;
   const candidates = [];
   for (let endI = ws; endI < n; endI++) {
     const startI = endI - ws;
@@ -160,11 +162,6 @@ export function extractDataset(data, accepted, opts = {}) {
     chosenTs.push(t);
   }
 
-  // Build X (windows) and y (labels)
-  const totalWindows = posWindows.length + negEnds.length;
-  const X = new Float32Array(totalWindows * ws * 6);
-  const y = new Uint8Array(totalWindows);
-
   function writeWindow(wi, startI) {
     const base = wi * ws * 6;
     for (let i = 0; i < ws; i++) {
@@ -175,8 +172,26 @@ export function extractDataset(data, accepted, opts = {}) {
     }
   }
 
+  // Data augmentation: jitter positive window boundaries by +/-2 samples.
+  // This reflects real trigger edge imprecision and multiplies positives.
+  const augPosWindows = [];
+  for (const pw of posWindows) {
+    augPosWindows.push(pw); // original
+    for (const jitter of [-2, -1, 1, 2]) {
+      const startI = pw.startI + jitter;
+      const endI = pw.endI + jitter;
+      if (startI >= 0 && endI <= n) {
+        augPosWindows.push({ ...pw, startI, endI });
+      }
+    }
+  }
+
+  const totalWindows = augPosWindows.length + negEnds.length;
+  const X = new Float32Array(totalWindows * ws * 6);
+  const y = new Uint8Array(totalWindows);
+
   let wi = 0;
-  for (const pw of posWindows) { writeWindow(wi, pw.startI); y[wi] = 1; wi++; }
+  for (const pw of augPosWindows) { writeWindow(wi, pw.startI); y[wi] = 1; wi++; }
   for (const endI of negEnds) { writeWindow(wi, endI - ws); y[wi] = 0; wi++; }
 
   return {
@@ -186,8 +201,9 @@ export function extractDataset(data, accepted, opts = {}) {
     leadSamples,
     dtEstMs,
     channels: 6,
-    posCount: posWindows.length,
+    posCount: augPosWindows.length,
     negCount: negEnds.length,
+    rawPosCount: posWindows.length,
   };
 }
 
@@ -293,13 +309,17 @@ function sigmoid(x) {
   return 1 / (1 + Math.exp(-x));
 }
 
-export function trainLogReg(F, y, nRows, nFeat, { maxIter = 5000, lr = 1.0, l2 = 1.0 } = {}) {
+export function trainLogReg(F, y, nRows, nFeat, { maxIter = 5000, lr = 1.0, l2 = null } = {}) {
+  // Adaptive L2: stronger regularisation when dataset is small.
+  if (l2 === null) l2 = Math.max(1.0, 50 / nRows);
   const coef = new Float32Array(nFeat);
   let intercept = 0;
+  const lossHistory = [];
 
   for (let iter = 0; iter < maxIter; iter++) {
     const gCoef = new Float32Array(nFeat);
     let gIntercept = 0;
+    let lossSum = 0;
 
     for (let i = 0; i < nRows; i++) {
       let z = intercept;
@@ -308,7 +328,12 @@ export function trainLogReg(F, y, nRows, nFeat, { maxIter = 5000, lr = 1.0, l2 =
       const err = p - y[i];
       for (let j = 0; j < nFeat; j++) gCoef[j] += err * F[i * nFeat + j];
       gIntercept += err;
+      // Binary cross-entropy
+      const pClamp = Math.max(1e-7, Math.min(1 - 1e-7, p));
+      lossSum += -(y[i] * Math.log(pClamp) + (1 - y[i]) * Math.log(1 - pClamp));
     }
+
+    if (iter % 100 === 0 || iter === maxIter - 1) lossHistory.push({ iter, loss: lossSum / nRows });
 
     for (let j = 0; j < nFeat; j++) gCoef[j] = gCoef[j] / nRows + l2 * coef[j];
     gIntercept /= nRows;
@@ -318,7 +343,7 @@ export function trainLogReg(F, y, nRows, nFeat, { maxIter = 5000, lr = 1.0, l2 =
     intercept -= step * gIntercept;
   }
 
-  return { coef, intercept };
+  return { coef, intercept, lossHistory };
 }
 
 // ── MLP (64→32→1) with Adam optimizer ───────────────────────────────────────
@@ -334,8 +359,13 @@ function heInit(rows, cols, rng) {
 }
 
 export function trainMLP(F, y, nRows, nFeat, {
-  h1Size = 64, h2Size = 32, maxIter = 800, alpha = 1e-4, learningRate = 0.001, seed = 42,
+  h1Size = 64, h2Size = 32, maxIter = 800, alpha = null, learningRate = 0.001, seed = 42,
+  noiseStd = null,
 } = {}) {
+  // Adaptive L2: much stronger when dataset is tiny relative to param count.
+  if (alpha === null) alpha = Math.max(1e-4, 10 / nRows);
+  // Feature noise: prevents memorisation on small datasets. Scaled in standardised space.
+  if (noiseStd === null) noiseStd = nRows < 80 ? 0.15 : 0;
   const rng = makeRng(seed);
 
   let w1 = heInit(h1Size, nFeat, rng);
@@ -373,7 +403,18 @@ export function trainMLP(F, y, nRows, nFeat, {
     let gb3 = 0;
 
     for (let s = 0; s < nRows; s++) {
-      const x = F.subarray(s * nFeat, s * nFeat + nFeat);
+      // Inject Gaussian noise on small datasets to prevent memorisation.
+      let x;
+      if (noiseStd > 0) {
+        x = new Float32Array(nFeat);
+        const base = s * nFeat;
+        for (let k = 0; k < nFeat; k++) {
+          const u1 = rng() || 1e-10, u2 = rng();
+          x[k] = F[base + k] + noiseStd * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        }
+      } else {
+        x = F.subarray(s * nFeat, s * nFeat + nFeat);
+      }
 
       const h1 = new Float32Array(h1Size);
       for (let j = 0; j < h1Size; j++) {
@@ -441,6 +482,181 @@ export function trainMLP(F, y, nRows, nFeat, {
   }
 
   return { w1, b1, w2, b2, w3, b3 };
+}
+
+// Like trainMLP(), but yields to the browser and emits snapshots for UI animation.
+export async function trainMLPInteractive(F, y, nRows, nFeat, {
+  h1Size = 64, h2Size = 32, maxIter = 600, alpha = null, learningRate = 0.001, seed = 42,
+  snapshotEvery = 16, delayMs = 6, noiseStd = null,
+} = {}, onSnapshot = null) {
+  if (alpha === null) alpha = Math.max(1e-4, 10 / nRows);
+  if (noiseStd === null) noiseStd = nRows < 80 ? 0.15 : 0;
+  const rng = makeRng(seed);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  let w1 = heInit(h1Size, nFeat, rng);
+  let b1 = new Float32Array(h1Size);
+  let w2 = heInit(h2Size, h1Size, rng);
+  let b2 = new Float32Array(h2Size);
+  let w3 = heInit(1, h2Size, rng);
+  let b3 = 0;
+
+  const adamState = (len) => ({ m: new Float32Array(len), v: new Float32Array(len) });
+  const s_w1 = adamState(w1.length), s_b1 = adamState(b1.length);
+  const s_w2 = adamState(w2.length), s_b2 = adamState(b2.length);
+  const s_w3 = adamState(w3.length);
+  let s_b3_m = 0, s_b3_v = 0;
+
+  const beta1 = 0.9, beta2 = 0.999, eps = 1e-8;
+
+  function adamUpdate(param, grad, state, t) {
+    for (let i = 0; i < param.length; i++) {
+      state.m[i] = beta1 * state.m[i] + (1 - beta1) * grad[i];
+      state.v[i] = beta2 * state.v[i] + (1 - beta2) * grad[i] * grad[i];
+      const mHat = state.m[i] / (1 - Math.pow(beta1, t));
+      const vHat = state.v[i] / (1 - Math.pow(beta2, t));
+      param[i] -= learningRate * mHat / (Math.sqrt(vHat) + eps);
+    }
+  }
+
+  const mlpLossHistory = [];
+  const snap = (iter, loss) => {
+    if (!onSnapshot) return;
+    try {
+      onSnapshot({
+        iter, maxIter,
+        nFeat, h1Size, h2Size,
+        w1: w1.slice(), w2: w2.slice(), w3: w3.slice(),
+        loss, lossHistory: mlpLossHistory.slice(),
+      });
+    } catch {}
+  };
+  snap(0);
+  await sleep(0);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    const t = iter + 1;
+    const gw1 = new Float32Array(w1.length);
+    const gb1 = new Float32Array(h1Size);
+    const gw2 = new Float32Array(w2.length);
+    const gb2 = new Float32Array(h2Size);
+    const gw3 = new Float32Array(w3.length);
+    let gb3 = 0;
+
+    for (let s = 0; s < nRows; s++) {
+      let x;
+      if (noiseStd > 0) {
+        x = new Float32Array(nFeat);
+        const base = s * nFeat;
+        for (let k = 0; k < nFeat; k++) {
+          const u1 = rng() || 1e-10, u2 = rng();
+          x[k] = F[base + k] + noiseStd * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        }
+      } else {
+        x = F.subarray(s * nFeat, s * nFeat + nFeat);
+      }
+
+      const h1 = new Float32Array(h1Size);
+      for (let j = 0; j < h1Size; j++) {
+        let sum = b1[j];
+        const wOff = j * nFeat;
+        for (let k = 0; k < nFeat; k++) sum += w1[wOff + k] * x[k];
+        h1[j] = sum > 0 ? sum : 0;
+      }
+
+      const h2 = new Float32Array(h2Size);
+      for (let j = 0; j < h2Size; j++) {
+        let sum = b2[j];
+        const wOff = j * h1Size;
+        for (let k = 0; k < h1Size; k++) sum += w2[wOff + k] * h1[k];
+        h2[j] = sum > 0 ? sum : 0;
+      }
+
+      let z = b3;
+      for (let k = 0; k < h2Size; k++) z += w3[k] * h2[k];
+      const p = sigmoid(z);
+
+      const dz = p - y[s];
+      for (let k = 0; k < h2Size; k++) gw3[k] += dz * h2[k];
+      gb3 += dz;
+
+      const dh2 = new Float32Array(h2Size);
+      for (let j = 0; j < h2Size; j++) dh2[j] = dz * w3[j] * (h2[j] > 0 ? 1 : 0);
+      for (let j = 0; j < h2Size; j++) {
+        const wOff = j * h1Size;
+        for (let k = 0; k < h1Size; k++) gw2[wOff + k] += dh2[j] * h1[k];
+        gb2[j] += dh2[j];
+      }
+
+      const dh1 = new Float32Array(h1Size);
+      for (let j = 0; j < h1Size; j++) {
+        let sum = 0;
+        for (let k = 0; k < h2Size; k++) sum += dh2[k] * w2[k * h1Size + j];
+        dh1[j] = sum * (h1[j] > 0 ? 1 : 0);
+      }
+      for (let j = 0; j < h1Size; j++) {
+        const wOff = j * nFeat;
+        for (let k = 0; k < nFeat; k++) gw1[wOff + k] += dh1[j] * x[k];
+        gb1[j] += dh1[j];
+      }
+    }
+
+    const invN = 1 / nRows;
+    for (let i = 0; i < gw1.length; i++) gw1[i] = gw1[i] * invN + alpha * w1[i];
+    for (let i = 0; i < gb1.length; i++) gb1[i] *= invN;
+    for (let i = 0; i < gw2.length; i++) gw2[i] = gw2[i] * invN + alpha * w2[i];
+    for (let i = 0; i < gb2.length; i++) gb2[i] *= invN;
+    for (let i = 0; i < gw3.length; i++) gw3[i] = gw3[i] * invN + alpha * w3[i];
+    gb3 = gb3 * invN;
+
+    adamUpdate(w1, gw1, s_w1, t);
+    adamUpdate(b1, gb1, s_b1, t);
+    adamUpdate(w2, gw2, s_w2, t);
+    adamUpdate(b2, gb2, s_b2, t);
+    adamUpdate(w3, gw3, s_w3, t);
+    s_b3_m = beta1 * s_b3_m + (1 - beta1) * gb3;
+    s_b3_v = beta2 * s_b3_v + (1 - beta2) * gb3 * gb3;
+    const mHat3 = s_b3_m / (1 - Math.pow(beta1, t));
+    const vHat3 = s_b3_v / (1 - Math.pow(beta2, t));
+    b3 -= learningRate * mHat3 / (Math.sqrt(vHat3) + eps);
+
+    // Compute training loss for this epoch
+    let epochLoss = 0;
+    for (let s = 0; s < nRows; s++) {
+      const xr = F.subarray(s * nFeat, s * nFeat + nFeat);
+      const h1t = new Float32Array(h1Size);
+      for (let j = 0; j < h1Size; j++) {
+        let sum = b1[j]; const wOff = j * nFeat;
+        for (let k = 0; k < nFeat; k++) sum += w1[wOff + k] * xr[k];
+        h1t[j] = sum > 0 ? sum : 0;
+      }
+      const h2t = new Float32Array(h2Size);
+      for (let j = 0; j < h2Size; j++) {
+        let sum = b2[j]; const wOff = j * h1Size;
+        for (let k = 0; k < h1Size; k++) sum += w2[wOff + k] * h1t[k];
+        h2t[j] = sum > 0 ? sum : 0;
+      }
+      let zt = b3;
+      for (let k = 0; k < h2Size; k++) zt += w3[k] * h2t[k];
+      const pt = sigmoid(zt);
+      const pc = Math.max(1e-7, Math.min(1 - 1e-7, pt));
+      epochLoss += -(y[s] * Math.log(pc) + (1 - y[s]) * Math.log(1 - pc));
+    }
+    epochLoss /= nRows;
+    if ((iter + 1) % snapshotEvery === 0 || iter === maxIter - 1) {
+      mlpLossHistory.push({ iter: iter + 1, loss: epochLoss });
+    }
+
+    if ((iter + 1) % snapshotEvery === 0 || iter === maxIter - 1) {
+      snap(iter + 1, epochLoss);
+      await sleep(delayMs);
+    } else if ((iter + 1) % 64 === 0) {
+      await sleep(0);
+    }
+  }
+
+  snap(maxIter, mlpLossHistory.length > 0 ? mlpLossHistory[mlpLossHistory.length - 1].loss : null);
+  return { w1, b1, w2, b2, w3, b3, lossHistory: mlpLossHistory };
 }
 
 // ── CRC32 (IEEE, matches zlib.crc32) ────────────────────────────────────────
@@ -544,7 +760,13 @@ export function predictMLPSingle(feat, scalerMean, scalerScale, w1, b1, w2, b2, 
 
 // ── Full training pipeline ──────────────────────────────────────────────────
 
-export function trainPipeline(logBytes, onLog = () => {}) {
+export async function trainPipeline(logBytes, onLog = () => {}, opts = {}) {
+  const {
+    onMlpSnapshot = null,
+    mlpSnapshotEvery = 16,
+    mlpDelayMs = 6,
+    mlpMaxIter = 600,
+  } = opts;
   onLog("Parsing binary log...");
   const data = parseBinaryLog(logBytes);
   onLog(`Parsed ${data.n} samples (${(data.n / 100).toFixed(1)}s at 100Hz)`);
@@ -558,11 +780,25 @@ export function trainPipeline(logBytes, onLog = () => {}) {
 
   onLog("Extracting training windows...");
   const ds = extractDataset(data, accepted);
-  onLog(`Dataset: ${ds.posCount} positive, ${ds.negCount} negative windows (${ds.windowSamples} samples each)`);
+  const rawPos = ds.rawPosCount ?? ds.posCount;
+  onLog(`Dataset: ${rawPos} shots → ${ds.posCount} positive (augmented), ${ds.negCount} negative windows (${ds.windowSamples} samples each)`);
   if (Math.abs(ds.dtEstMs - 10) > 2) onLog(`WARNING: estimated dt is ${ds.dtEstMs.toFixed(2)}ms (expected ~10ms). Training still uses fixed 50-sample windows.`);
 
   if (ds.posCount === 0 || ds.negCount === 0)
     throw new Error("Not enough training data. Need both positive and negative windows.");
+
+  // Data quality warnings
+  const warnings = [];
+  const recSec = data.n > 0 ? (data.ts[data.n - 1] - data.ts[0]) / 1000 : 0;
+  if (recSec < 120)
+    warnings.push(`Short recording (${recSec.toFixed(0)}s). Aim for 5+ minutes for best results.`);
+  if (accepted.length < 8)
+    warnings.push(`Few shots (${accepted.length}). 15+ shots with varied aim directions gives better generalisation.`);
+  if (ds.totalWindows < 30)
+    warnings.push(`Small dataset (${ds.totalWindows} windows). Model may overfit — predictions could be overconfident.`);
+  if (ds.negCount < ds.posCount * 0.6)
+    warnings.push(`Few negative windows (${ds.negCount} vs ${ds.posCount} positive). Include more non-shooting movement.`);
+  for (const w of warnings) onLog(`WARNING: ${w}`);
 
   // Featurize once (unscaled), then:
   // 1) compute quick held-out metrics (train/test split)
@@ -588,14 +824,29 @@ export function trainPipeline(logBytes, onLog = () => {}) {
   onLog("Training MLP (final, all data)...");
   const scalerMLP = fitScaler(F_mlp_raw, ds.totalWindows, nfMLP);
   const F_mlp_s = applyScaler(F_mlp_raw, ds.totalWindows, nfMLP, scalerMLP.mean, scalerMLP.scale);
-  const mlp = trainMLP(F_mlp_s, ds.y, ds.totalWindows, nfMLP);
+  const mlp = await trainMLPInteractive(
+    F_mlp_s, ds.y, ds.totalWindows, nfMLP,
+    { maxIter: mlpMaxIter, snapshotEvery: mlpSnapshotEvery, delayMs: mlpDelayMs },
+    onMlpSnapshot,
+  );
+
+  // Validate weights before serialization — reject NaN/Inf from numerical instability.
+  const allFinite = (arr) => {
+    for (let i = 0; i < arr.length; i++) if (!Number.isFinite(arr[i])) return false;
+    return true;
+  };
+  if (!allFinite(lr.coef) || !Number.isFinite(lr.intercept))
+    throw new Error("LR training produced NaN/Inf weights. Try recording more data or reducing training iterations.");
+  if (!allFinite(mlp.w1) || !allFinite(mlp.b1) || !allFinite(mlp.w2) || !allFinite(mlp.b2) || !allFinite(mlp.w3) || !Number.isFinite(mlp.b3))
+    throw new Error("MLP training produced NaN/Inf weights. Try recording more data or reducing training iterations.");
 
   onLog("Building MLMD binaries...");
   const lrBlob = buildMlmdLR(ds.windowSamples, scalerLR.mean, scalerLR.scale, lr.coef, lr.intercept);
   const mlpBlob = buildMlmdMLP(
     ds.windowSamples, scalerMLP.mean, scalerMLP.scale,
-    mlp.w1, mlp.b1, mlp.w2, mlp.b2, mlp.w3, mlp.b3, nfMLP, 64, 32,
-  );
+    mlp.w1, mlp.b1, mlp.w2, mlp.b2, mlp.w3, mlp.b3, nfMLP, 64, 32);
+  onLog(`LR features: ${nfLR}, MLP features: ${nfMLP}`);
+
   onLog(`LR model: ${lrBlob.length} bytes, CRC=${crc32(lrBlob).toString(16)}`);
   onLog(`MLP model: ${mlpBlob.length} bytes, CRC=${crc32(mlpBlob).toString(16)}`);
 
@@ -609,7 +860,11 @@ export function trainPipeline(logBytes, onLog = () => {}) {
     durationMs: data.n > 0 ? data.ts[data.n - 1] - data.ts[0] : 0,
     shotsAll: risingAll.length, shotsAccepted: accepted.length,
     posWindows: ds.posCount, negWindows: ds.negCount,
-  }, metrics, lrBlob, mlpBlob, shotPlots };
+    rawPosCount: ds.rawPosCount ?? ds.posCount,
+  }, warnings, metrics, lrBlob, mlpBlob, shotPlots,
+    lrLossHistory: lr.lossHistory ?? [],
+    mlpLossHistory: mlp.lossHistory ?? [],
+  };
 }
 
 // ── Held-out metrics (quick self-check) ─────────────────────────────────────
@@ -705,6 +960,15 @@ function bestF1Threshold(yTrue, probs) {
   return { bestThr, bestF1 };
 }
 
+function bceLoss(yTrue, probs) {
+  let sum = 0;
+  for (let i = 0; i < yTrue.length; i++) {
+    const p = Math.max(1e-7, Math.min(1 - 1e-7, probs[i]));
+    sum += -(yTrue[i] * Math.log(p) + (1 - yTrue[i]) * Math.log(1 - p));
+  }
+  return sum / yTrue.length;
+}
+
 function evalHeldOut(F_lr_raw, nfLR, F_mlp_raw, nfMLP, y, nRows, testSize, seed) {
   const rng = makeRng(seed);
   const split = stratifiedSplit(y, nRows, testSize, rng);
@@ -719,12 +983,17 @@ function evalHeldOut(F_lr_raw, nfLR, F_mlp_raw, nfMLP, y, nRows, testSize, seed)
   const scalerLR = fitScaler(lrTrainRaw, split.trainIdx.length, nfLR);
   const lrTrain = applyScaler(lrTrainRaw, split.trainIdx.length, nfLR, scalerLR.mean, scalerLR.scale);
   const lrTest = applyScaler(lrTestRaw, split.testIdx.length, nfLR, scalerLR.mean, scalerLR.scale);
-  const lr = trainLogReg(lrTrain, yTrain, split.trainIdx.length, nfLR);
-  const probsLR = new Float32Array(split.testIdx.length);
-  for (let i = 0; i < probsLR.length; i++) probsLR[i] = predictLRScaledRow(lrTest, i, nfLR, lr.coef, lr.intercept);
-  const cmLR = confusionFromProbs(yTest, probsLR, 0.5);
+  const lr = trainLogReg(lrTrain, yTrain, split.trainIdx.length, nfLR, { maxIter: 1500 });
+  // LR predictions on train + test
+  const probsLRtest = new Float32Array(split.testIdx.length);
+  for (let i = 0; i < probsLRtest.length; i++) probsLRtest[i] = predictLRScaledRow(lrTest, i, nfLR, lr.coef, lr.intercept);
+  const probsLRtrain = new Float32Array(split.trainIdx.length);
+  for (let i = 0; i < probsLRtrain.length; i++) probsLRtrain[i] = predictLRScaledRow(lrTrain, i, nfLR, lr.coef, lr.intercept);
+  const cmLR = confusionFromProbs(yTest, probsLRtest, 0.5);
   const mLR = metricsFromCm(cmLR);
-  const bestLR = bestF1Threshold(yTest, probsLR);
+  const bestLR = bestF1Threshold(yTest, probsLRtest);
+  const lrTrainLoss = bceLoss(yTrain, probsLRtrain);
+  const lrValLoss = bceLoss(yTest, probsLRtest);
 
   // MLP
   const mlpTrainRaw = gatherRows(F_mlp_raw, split.trainIdx, nfMLP);
@@ -732,18 +1001,23 @@ function evalHeldOut(F_lr_raw, nfLR, F_mlp_raw, nfMLP, y, nRows, testSize, seed)
   const scalerMLP = fitScaler(mlpTrainRaw, split.trainIdx.length, nfMLP);
   const mlpTrain = applyScaler(mlpTrainRaw, split.trainIdx.length, nfMLP, scalerMLP.mean, scalerMLP.scale);
   const mlpTest = applyScaler(mlpTestRaw, split.testIdx.length, nfMLP, scalerMLP.mean, scalerMLP.scale);
-  const mlp = trainMLP(mlpTrain, yTrain, split.trainIdx.length, nfMLP);
-  const probsMLP = new Float32Array(split.testIdx.length);
-  for (let i = 0; i < probsMLP.length; i++)
-    probsMLP[i] = predictMLPScaledRow(mlpTest, i, nfMLP, mlp.w1, mlp.b1, mlp.w2, mlp.b2, mlp.w3, mlp.b3, 64, 32);
-  const cmMLP = confusionFromProbs(yTest, probsMLP, 0.5);
+  const mlp = trainMLP(mlpTrain, yTrain, split.trainIdx.length, nfMLP, { maxIter: 220, seed: 42 });
+  const probsMLPtest = new Float32Array(split.testIdx.length);
+  for (let i = 0; i < probsMLPtest.length; i++)
+    probsMLPtest[i] = predictMLPScaledRow(mlpTest, i, nfMLP, mlp.w1, mlp.b1, mlp.w2, mlp.b2, mlp.w3, mlp.b3, 64, 32);
+  const probsMLPtrain = new Float32Array(split.trainIdx.length);
+  for (let i = 0; i < probsMLPtrain.length; i++)
+    probsMLPtrain[i] = predictMLPScaledRow(mlpTrain, i, nfMLP, mlp.w1, mlp.b1, mlp.w2, mlp.b2, mlp.w3, mlp.b3, 64, 32);
+  const cmMLP = confusionFromProbs(yTest, probsMLPtest, 0.5);
   const mMLP = metricsFromCm(cmMLP);
-  const bestMLP = bestF1Threshold(yTest, probsMLP);
+  const bestMLP = bestF1Threshold(yTest, probsMLPtest);
+  const mlpTrainLoss = bceLoss(yTrain, probsMLPtrain);
+  const mlpValLoss = bceLoss(yTest, probsMLPtest);
 
   return {
     split: { testSize, seed, ...split, testN: split.testIdx.length, trainN: split.trainIdx.length },
-    lr: { threshold: 0.5, cm: cmLR, ...mLR, bestThreshold: bestLR.bestThr, bestF1: bestLR.bestF1 },
-    mlp: { threshold: 0.5, cm: cmMLP, ...mMLP, bestThreshold: bestMLP.bestThr, bestF1: bestMLP.bestF1 },
+    lr: { threshold: 0.5, cm: cmLR, ...mLR, bestThreshold: bestLR.bestThr, bestF1: bestLR.bestF1, trainLoss: lrTrainLoss, valLoss: lrValLoss },
+    mlp: { threshold: 0.5, cm: cmMLP, ...mMLP, bestThreshold: bestMLP.bestThr, bestF1: bestMLP.bestF1, trainLoss: mlpTrainLoss, valLoss: mlpValLoss },
   };
 }
 

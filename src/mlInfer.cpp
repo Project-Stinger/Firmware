@@ -283,7 +283,7 @@ static void featurizeRich(const float w[ML_WINDOW_SAMPLES][ML_CHANNELS], float o
 		float am = sqrtf(a2);
 		float gm = sqrtf(g2);
 		aSumM += am;
-		aSumSq += a2; // am^2 = a2
+		aSumSq += a2;
 		if (am > aMax) aMax = am;
 		gSumM += gm;
 		gSumSq += g2;
@@ -314,9 +314,12 @@ static float predictLogreg(const float w[ML_WINDOW_SAMPLES][ML_CHANNELS]) {
 	float feat[ML_LR_FEATURES];
 	featurizeSummary(w, feat);
 
-	// StandardScaler
-	for (u32 i = 0; i < ML_LR_FEATURES; i++)
-		feat[i] = (feat[i] - gLrMean[i]) / gLrScale[i];
+	// StandardScaler (epsilon guards against div-by-zero from corrupted models)
+	for (u32 i = 0; i < ML_LR_FEATURES; i++) {
+		float s = gLrScale[i];
+		if (s < 1e-10f) s = 1e-10f;
+		feat[i] = (feat[i] - gLrMean[i]) / s;
+	}
 
 	// dot product + intercept
 	float z = gLrIntercept;
@@ -330,9 +333,12 @@ static float predictMlp(const float w[ML_WINDOW_SAMPLES][ML_CHANNELS]) {
 	float feat[ML_MLP_FEATURES];
 	featurizeRich(w, feat);
 
-	// StandardScaler
-	for (u32 i = 0; i < ML_MLP_FEATURES; i++)
-		feat[i] = (feat[i] - gMlpMean[i]) / gMlpScale[i];
+	// StandardScaler (epsilon guards against div-by-zero from corrupted models)
+	for (u32 i = 0; i < ML_MLP_FEATURES; i++) {
+		float s = gMlpScale[i];
+		if (s < 1e-10f) s = 1e-10f;
+		feat[i] = (feat[i] - gMlpMean[i]) / s;
+	}
 
 	// Layer 1: 30 -> 64, ReLU
 	float h1[ML_MLP_H1];
@@ -367,6 +373,21 @@ float mlInferPredict(MlModel model) {
 
 	float w[ML_WINDOW_SAMPLES][ML_CHANNELS];
 	copyWindowF32(w);
+
+	// Motion gate: if there's no meaningful motion in the window, return 0.
+	// The model was trained on data where the stillness pause removed static
+	// periods, so it has never seen "still and not shooting". Without this gate
+	// it predicts high confidence on stillness (extrapolation beyond training data).
+	{
+		float gyroSqSum = 0;
+		for (u32 i = 0; i < ML_WINDOW_SAMPLES; i++) {
+			gyroSqSum += w[i][3] * w[i][3] + w[i][4] * w[i][4] + w[i][5] * w[i][5];
+		}
+		float gyroRms = sqrtf(gyroSqSum / ML_WINDOW_SAMPLES);
+		// Threshold: typical IMU noise floor is ~20-40 LSB RMS for gyro at rest.
+		// Pre-shot settling still has gyro RMS > 100 from the deceleration.
+		if (gyroRms < 60.0f) return 0.0f;
+	}
 
 	if (model == ML_MODEL_LOGREG)
 		return predictLogreg(w);
@@ -497,6 +518,30 @@ static bool loadUserModelFromPath(const char *path, bool expectType, u8 expected
 			resetMlpToFactory();
 		return false;
 	}
+	// Sanity check: reject models containing NaN or Inf weights.
+	auto hasNonFinite = [](const float *arr, size_t n) -> bool {
+		for (size_t i = 0; i < n; i++)
+			if (!isfinite(arr[i])) return true;
+		return false;
+	};
+	if (h.modelType == 0) {
+		if (hasNonFinite(gLrMean, ML_LR_FEATURES) || hasNonFinite(gLrScale, ML_LR_FEATURES) ||
+			hasNonFinite(gLrCoef, ML_LR_FEATURES) || !isfinite(gLrIntercept)) {
+			Serial.println("[ml] WARNING: user LR model contains NaN/Inf, reverting to factory");
+			resetLrToFactory();
+			return false;
+		}
+	} else {
+		if (hasNonFinite(gMlpMean, ML_MLP_FEATURES) || hasNonFinite(gMlpScale, ML_MLP_FEATURES) ||
+			hasNonFinite(gMlpW1, ML_MLP_H1 * ML_MLP_FEATURES) || hasNonFinite(gMlpB1, ML_MLP_H1) ||
+			hasNonFinite(gMlpW2, ML_MLP_H2 * ML_MLP_H1) || hasNonFinite(gMlpB2, ML_MLP_H2) ||
+			hasNonFinite(gMlpW3, ML_MLP_H2) || !isfinite(gMlpB3)) {
+			Serial.println("[ml] WARNING: user MLP model contains NaN/Inf, reverting to factory");
+			resetMlpToFactory();
+			return false;
+		}
+	}
+
 	// Mark which model types are actually present in this user file.
 	if (h.modelType == 0)
 		gUserHasLR = true;

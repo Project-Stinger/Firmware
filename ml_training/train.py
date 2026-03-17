@@ -84,7 +84,106 @@ def featurize(X, kind: str):
             ],
             axis=1,
         )
+    if kind == "invariant":
+        # Orientation-invariant features (16): must match firmware featurizeInvariant.
+        return _featurize_invariant(X, rich=False)
+    if kind == "invariant_rich":
+        # Invariant + per-axis extras (22): must match firmware featurizeInvariantRich.
+        return _featurize_invariant(X, rich=True)
     raise SystemExit(f"Unknown features: {kind}")
+
+
+def _featurize_invariant(X, rich=False):
+    """Orientation-invariant features matching firmware mlInfer.cpp."""
+    import numpy as np
+
+    N = X.shape[1]  # window samples (50)
+    NJ = N - 1
+    HALF = N // 2
+    QUARTER = N // 4
+
+    a = X[:, :, 0:3].astype(np.float64)
+    g = X[:, :, 3:6].astype(np.float64)
+
+    # Per-sample magnitudes
+    amag = np.sqrt((a * a).sum(axis=2))  # (B, N)
+    gmag = np.sqrt((g * g).sum(axis=2))  # (B, N)
+
+    # Jerk = accel[i+1] - accel[i]
+    jerk = a[:, 1:, :] - a[:, :-1, :]  # (B, NJ, 3)
+    jmag = np.sqrt((jerk * jerk).sum(axis=2))  # (B, NJ)
+
+    # [0] jerk_mag_mean
+    jmean = jmag.mean(axis=1, keepdims=True)
+    # [1] jerk_mag_std
+    jstd = jmag.std(axis=1, keepdims=True)
+    # [2] jerk_mag_max
+    jmax = jmag.max(axis=1, keepdims=True)
+    # [3] jerk_mag_rms
+    jrms = np.sqrt((jmag * jmag).mean(axis=1, keepdims=True))
+
+    # HP accel magnitude (subtract window mean)
+    amag_mean = amag.mean(axis=1, keepdims=True)
+    hp_amag = amag - amag_mean
+    # [4] hp_amag_std
+    hp_std = hp_amag.std(axis=1, keepdims=True)
+    # [5] hp_amag_max
+    hp_absmax = np.maximum(np.abs(hp_amag.max(axis=1, keepdims=True)), np.abs(hp_amag.min(axis=1, keepdims=True)))
+    # [6] hp_amag_range
+    hp_range = (hp_amag.max(axis=1, keepdims=True) - hp_amag.min(axis=1, keepdims=True))
+
+    # Gyro magnitude stats
+    gmean = gmag.mean(axis=1, keepdims=True)
+    gstd = gmag.std(axis=1, keepdims=True)
+    gmax = gmag.max(axis=1, keepdims=True)
+    gmin = gmag.min(axis=1, keepdims=True)
+    grange = gmax - gmin
+
+    # [11] gyro_slope: 2nd half mean - 1st half mean
+    g1mean = gmag[:, :HALF].mean(axis=1, keepdims=True)
+    g2mean = gmag[:, HALF:].mean(axis=1, keepdims=True)
+    gyro_slope = g2mean - g1mean
+
+    # [12] jerk_mean_ratio: 2nd half / 1st half
+    j1count = max(HALF - 1, 1)
+    j1mean = jmag[:, :j1count].mean(axis=1, keepdims=True)
+    j2mean = jmag[:, j1count:].mean(axis=1, keepdims=True)
+    jerk_ratio = np.where(j1mean > 1e-6, j2mean / j1mean, 1.0)
+
+    # [13] gyro_std_ratio: 2nd half std / 1st half std
+    g1std = gmag[:, :HALF].std(axis=1, keepdims=True)
+    g2std = gmag[:, HALF:].std(axis=1, keepdims=True)
+    gyro_std_ratio = np.where(g1std > 1e-6, g2std / g1std, 1.0)
+
+    # [14] energy_ratio_last_q
+    lastQ = max(NJ - QUARTER, 0)
+    jmag_sq = jmag * jmag
+    j_energy_total = jmag_sq.sum(axis=1, keepdims=True)
+    j_energy_lastq = jmag_sq[:, lastQ:].sum(axis=1, keepdims=True)
+    energy_ratio = np.where(j_energy_total > 1e-6, j_energy_lastq / j_energy_total, 0.25)
+
+    # [15] zcr_jerk_mag
+    jmean_bc = jmag.mean(axis=1, keepdims=True)
+    above = jmag >= jmean_bc
+    crossings = (above[:, 1:] != above[:, :-1]).sum(axis=1, keepdims=True).astype(np.float64)
+    zcr = crossings / max(NJ - 1, 1)
+
+    feats = [jmean, jstd, jmax, jrms,
+             hp_std, hp_absmax, hp_range,
+             gmean, gstd, gmax, grange,
+             gyro_slope, jerk_ratio, gyro_std_ratio, energy_ratio, zcr]
+
+    if rich:
+        # Per-axis gyro std (3)
+        for c in range(3):
+            gyro_c = g[:, :, c]
+            feats.append(gyro_c.std(axis=1, keepdims=True))
+        # Per-axis jerk std (3)
+        for c in range(3):
+            jerk_c = jerk[:, :, c]
+            feats.append(jerk_c.std(axis=1, keepdims=True))
+
+    return np.concatenate(feats, axis=1).astype(np.float32)
 
 
 def pr_auc_score(y_true, y_score):
@@ -117,7 +216,7 @@ def main() -> None:
         default="logreg",
         help="Model type (default: logreg)",
     )
-    ap.add_argument("--features", choices=["summary", "rich", "flatten"], default="summary", help="Feature type (default: summary)")
+    ap.add_argument("--features", choices=["summary", "rich", "flatten", "invariant", "invariant_rich"], default="summary", help="Feature type (default: summary)")
     ap.add_argument("--test-size", type=float, default=0.25, help="Test split fraction (default: 0.25)")
     ap.add_argument("--seed", type=int, default=1, help="RNG seed (default: 1)")
     ap.add_argument("--max-rows", type=int, default=0, help="Limit dataset rows (0=all)")

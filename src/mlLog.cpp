@@ -90,6 +90,8 @@ static bool mlLogFlushSome(u32 maxSamples) {
 				logFullWarned = true;
 				Serial.println("[ml] WARNING: log full (short write); logging disabled");
 				makeSound(3000, 200);
+				makeSound(2000, 200);
+				makeSound(3000, 200);
 			}
 			return false;
 		}
@@ -156,6 +158,8 @@ static void mlLogExportBinary() {
 					if (n <= 0) break;
 					Serial.write(buf, (size_t)n);
 					sent += (u32)n;
+					// Flush every 4KB to prevent CDC TX buffer stall on large logs.
+					if ((sent & 0xFFF) < (u32)n) Serial.flush();
 				}
 				f2.close();
 				Serial.println("\nMLDUMP_DONE");
@@ -192,8 +196,16 @@ void mlLogInit() {
 	sampleCountWritten = 0;
 	decim = 0;
 
-	// New session per boot (user asked: only reset to 0% after a full reboot).
-	if (LittleFS.exists(ML_LOG_FILENAME)) LittleFS.remove(ML_LOG_FILENAME);
+	// Preserve log across reboots so USB plug-in doesn't lose data.
+	// Log is only cleared when the user starts a new recording (mlLogStartRecording with !sessionStartedThisBoot).
+	if (LittleFS.exists(ML_LOG_FILENAME)) {
+		File f = LittleFS.open(ML_LOG_FILENAME, "r");
+		if (f) {
+			sampleCountWritten = (u32)(f.size() / sizeof(MlSample));
+			f.close();
+			Serial.printf("[ml] existing log: %lu samples\n", sampleCountWritten);
+		}
+	}
 
 	Serial.println("[ml] filesystem ready");
 }
@@ -275,7 +287,7 @@ void mlLogLoop() {
 	constexpr i32 UNPAUSE_DELTA = 140; // hysteresis (harder to resume)
 	constexpr i32 STILL_GYRO_ABS = 45; // gyro near-zero threshold
 	constexpr i32 UNPAUSE_GYRO_ABS = 240; // gyro threshold to resume even if deltas are small
-	constexpr u32 STILL_SAMPLES_TO_PAUSE = 50; // ~0.50s @ 100Hz
+	constexpr u32 STILL_SAMPLES_TO_PAUSE = 150; // ~1.50s @ 100Hz (log some stillness as negative data)
 	constexpr u32 UNPAUSE_SAMPLES = 10; // require sustained motion to resume
 	static bool haveLast = false;
 	static i16 lastAx = 0, lastAy = 0, lastAz = 0, lastGx = 0, lastGy = 0, lastGz = 0;

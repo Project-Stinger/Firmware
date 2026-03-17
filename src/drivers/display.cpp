@@ -747,6 +747,10 @@ void displayLoop() {
 #ifdef USE_TINYUSB
 			static bool lastUsbActive = false;
 #endif
+			if (firstRun) {
+				lastMlStr[0] = '\0';
+				mlUpdateTimer = 1000;
+			}
 			u32 periodMs = 1000;
 			if (!mlLogIsActive()) {
 				u8 pct = 0;
