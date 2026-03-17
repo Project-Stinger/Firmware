@@ -17,4 +17,5 @@ include/git_version.h
 .last_git_hash
 _local_artifacts/
 ml_web/_jobs/
+ml_training/report_latest.md
 video/
