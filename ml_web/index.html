@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stinger — Personal ML Model</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="hero">
+        <h1>Personalize your Stinger ML idle</h1>
+        <p class="sub">
+          Record one session, plug in, and we’ll train <b>both</b> models (LR + MLP), show you what they’re predicting,
+          then load your custom weights without reflashing.
+        </p>
+        <div class="pill-row">
+          <span class="pill">Web Serial (Chrome/Edge)</span>
+          <span class="pill">No UF2 for model upload</span>
+          <span class="pill">LR + MLP</span>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>1) Update firmware</h2>
+        <ol>
+          <li>Flash the latest V2 firmware: <code>stinger-v2-latest.uf2</code>.</li>
+          <li>Verify in the Device menu you see: <b>Start ML Recording</b> / <b>Stop ML Recording</b>.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2>2) Record a session (about 15 minutes max)</h2>
+        <p>
+          The logger stores IMU + trigger at 100Hz in onboard flash. You have about <b>14–15 minutes</b> per session.
+          Record one continuous session that includes your normal aiming style.
+        </p>
+        <ul>
+          <li><b>Play normally</b>: aim, track targets, move around like you actually do.</li>
+          <li>
+            <b>Include negatives</b>:
+            spend some time aiming/moving <i>without firing</i>. This teaches the model what “not about to shoot” looks like.
+          </li>
+          <li><b>Include positives</b>: do a bunch of real shots throughout the session.</li>
+          <li>Try to avoid rapid double-taps; shots &lt;1s apart may be marked invalid to avoid recoil spillover.</li>
+        </ul>
+        <div class="callout">
+          Menu → Device → <b>Start ML Recording</b> … play … Menu → Device → <b>Stop ML Recording</b>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>3) Plug in</h2>
+        <ol>
+          <li>Remove the top panel with the Picatinny rail to expose the USB port.</li>
+          <li>Plug the blaster into your computer via USB.</li>
+          <li>Keep it plugged in until the end (we’ll upload your model over the same connection).</li>
+        </ol>
+        <div class="row">
+          <button id="btnReady" class="primary">I’m ready</button>
+          <button id="btnDisconnect" class="ghost" disabled>Disconnect</button>
+        </div>
+        <div id="conn" class="status">Not connected</div>
+      </section>
+
+      <section class="card">
+        <h2>Progress</h2>
+        <div id="steps" class="steps"></div>
+        <div id="spinner" class="spinner hidden"></div>
+        <div class="row">
+          <button id="btnDownloadTrace" class="ghost" disabled>Download debug trace</button>
+        </div>
+        <pre id="log" class="log"></pre>
+      </section>
+
+      <section id="results" class="card hidden">
+        <h2>Results</h2>
+        <div id="summary" class="summary"></div>
+
+        <h3>Shot examples (LR vs MLP)</h3>
+        <p class="sub">
+          Top plot: probability output of both models. Bottom plot: the 6 IMU axes. Red line is trigger. Gray band is the
+          “prediction window” (100–600ms before trigger).
+        </p>
+        <div id="shotGrid" class="grid"></div>
+
+        <div class="row">
+          <button id="btnLoadModel" class="primary" disabled>All good, load my custom model</button>
+          <button id="btnDownloadModels" class="ghost" disabled>Download model files</button>
+        </div>
+        <div id="after" class="callout hidden"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/static/app.js?v=8"></script>
+  </body>
+</html>

@@ -29,6 +29,16 @@ The firmware is written in C++ and uses the [PlatformIO](https://platformio.org/
 
 You may find some options from the `platformio.ini` file useful for debugging and development, such as the blackbox or debug print statements.
 
+## ML Features (V2 only)
+
+The V2 firmware includes:
+
+- ML-focused IMU data logging (onboard flash)
+- On-device inference (LR + MLP) for predictive idle pre-spin
+- A local prototype Web UI for “record → train → upload weights” without reflashing UF2
+
+See `ML.md` for end-to-end documentation (recording, serial commands, model upload format, web workflow).
+
 ## Missing something?
 
 This project is still in the early stages of making the source available. If you feel like something is missing in order to make this repo accessible, please open an issue or ask in the discussion forum.

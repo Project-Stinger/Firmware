@@ -13,11 +13,156 @@ bool idleEnabled = false;
 #elif HW_VERSION == 2
 u8 idleEnabled = 0;
 const fix32 IDLE_5_DEG = fix32(5.0 * PI / 180.0);
+u8 mlIdleMode = 0;
+u8 mlThresholdPct = 50;
+// ML idle mode: uses cached inference results and post-processing to control idling RPM.
+static float mlIdleProb = 0.0f;
+static float mlIdleProbRaw = 0.0f;
+static bool mlIdleOn = false;
+static u16 mlInferCounter = 0;
+// Control update cadence (NOT inference cadence anymore).
+// Inference runs on core 0 in mlInferSlowLoop(); core 1 reads the cached prob here.
+static constexpr u16 ML_INFER_HZ = 100;
+static constexpr u16 ML_INFER_INTERVAL = (PID_RATE / ML_INFER_HZ) ? (PID_RATE / ML_INFER_HZ) : 1;
+// Envelope follower (fast attack, slow release). This avoids the "I-term spool" feel:
+// - spin up quickly and consistently when the model is confident
+// - relax more slowly to avoid chattering
+static constexpr float ML_IDLE_ALPHA_UP = 0.18f; // ~50ms attack @ 100Hz
+static constexpr float ML_IDLE_ALPHA_DOWN = 0.03f; // ~330ms release @ 100Hz
+static i32 mlIdleTargetRpm = 0;
+static bool mlIdleProbValid = false;
+
+static inline float clamp01(float x) {
+	if (x < 0.0f) return 0.0f;
+	if (x > 1.0f) return 1.0f;
+	return x;
+}
+
+static inline float followProb(float cur, float raw) {
+	raw = clamp01(raw);
+	const float a = (raw > cur) ? ML_IDLE_ALPHA_UP : ML_IDLE_ALPHA_DOWN;
+	return cur + a * (raw - cur);
+}
+
+static inline float mlThreshOn() {
+	// Stored as percent. Clamp so off<thresh always meaningful.
+	u8 pct = mlThresholdPct;
+	if (pct < 5) pct = 5;
+	if (pct > 95) pct = 95;
+	return (float)pct / 100.0f;
+}
+
+static inline float mlThreshOff(float on) {
+	// Keep the previous behavior when on=0.5 => off=0.25.
+	float off = 0.5f * on;
+	if (off > on - 0.01f) off = on - 0.01f;
+	if (off < 0.0f) off = 0.0f;
+	return off;
+}
+
+static inline i32 mlDynamicRpm(float prob, float off, float on, i32 maxRpm) {
+	constexpr i32 MIN_RPM = 1000;
+	if (maxRpm <= 0) return 0;
+	i32 minRpm = MIN_RPM;
+	if (maxRpm < minRpm) minRpm = maxRpm;
+	const float denom = (on - off);
+	float a = denom > 0.001f ? (prob - off) / denom : 0.0f;
+	a = clamp01(a);
+	return minRpm + (i32)((float)(maxRpm - minRpm) * a);
+}
+
 bool checkIdle() {
 	static bool lastIdleEnabled = false;
+	if (idleEnabled >= 8) {
+		// Keep last probability around for UI/debug; do not reset each call.
+		mlIdleProbValid = mlInferReady();
+
+		// ML-based idle: 8 = LogReg, 9 = MLP
+		// If the user is recording ML logs, disable ML-based idling to keep the
+		// "recording" experience predictable and avoid extra CPU work on core 0
+		// during flash flush windows.
+		if (mlLogIsActive()) {
+			mlIdleOn = false;
+			mlIdleTargetRpm = 0;
+			lastIdleEnabled = false;
+			return false;
+		}
+		if (!mlInferReady()) {
+			mlIdleOn = false;
+			mlIdleTargetRpm = 0;
+			lastIdleEnabled = false;
+			return false;
+		}
+		mlIdleProbValid = true;
+		// If core0 is starved (e.g. heavy UI), don't keep using stale probabilities.
+		// Treat stale as 0-confidence.
+		if (mlInferCachedAgeMs() > 250) {
+			mlIdleProbRaw = 0.0f;
+			mlIdleProb = followProb(mlIdleProb, 0.0f);
+			mlIdleOn = false;
+			mlIdleTargetRpm = 0;
+			lastIdleEnabled = false;
+			return false;
+		}
+		if (++mlInferCounter >= ML_INFER_INTERVAL) {
+			mlInferCounter = 0;
+			MlModel model = (idleEnabled == 8) ? ML_MODEL_LOGREG : ML_MODEL_MLP;
+			float raw = mlInferGetCachedProb(model);
+			mlIdleProbRaw = clamp01(raw);
+			mlIdleProb = followProb(mlIdleProb, mlIdleProbRaw);
+
+			const float on = mlThreshOn();
+			const float off = mlThreshOff(on);
+
+			if (mlIdleMode == 0) {
+				// Binary idle with hysteresis on the *smoothed* probability.
+				// (Spin up quickly due to fast attack; relax slowly due to slow release.)
+				if (mlIdleOn) {
+					if (mlIdleProb < off) mlIdleOn = false;
+				} else {
+					if (mlIdleProb >= on) mlIdleOn = true;
+				}
+				mlIdleTargetRpm = mlIdleOn ? idleRpm : 0;
+			} else {
+				// Dynamic RPM:
+				// - compute desired RPM directly from RAW probability (more responsive)
+				// - then smooth RPM with a fast attack / slow release envelope
+				const float p = mlIdleProbRaw;
+				const i32 desired = (p >= off) ? mlDynamicRpm(p, off, on, idleRpm) : 0;
+				const float a = (desired > mlIdleTargetRpm) ? 0.40f : 0.05f;
+				mlIdleTargetRpm = (i32)((1.0f - a) * (float)mlIdleTargetRpm + a * (float)desired);
+			}
+		}
+		const bool allow = (!idleOnlyWithMag || (magPresent || !foundTof));
+		if (!allow) {
+			mlIdleOn = false;
+			mlIdleTargetRpm = 0;
+		}
+		lastIdleEnabled = (mlIdleTargetRpm > 0) && allow;
+		return lastIdleEnabled;
+	}
 	fix32 threshold = IDLE_5_DEG * idleEnabled + (lastIdleEnabled ? (IDLE_5_DEG / 3) : (-IDLE_5_DEG / 3));
 	lastIdleEnabled = idleEnabled && (idleEnabled == 1 || pitch.abs() < threshold) && (!idleOnlyWithMag || (magPresent || !foundTof));
 	return lastIdleEnabled;
+}
+
+bool mlIdleGetConfidencePct(u8 *outPct) {
+	if (!outPct) return false;
+#if HW_VERSION != 2
+	*outPct = 0;
+	return false;
+#else
+	if (idleEnabled < 8) return false;
+	if (mlLogIsActive()) return false;
+	// Always return a value while ML idling is selected; before the window fills
+	// it'll naturally read as 0%.
+	// UI should show the raw model output; control uses smoothed mlIdleProb / smoothed rpm.
+	float p = mlIdleProbRaw;
+	if (p < 0.0f) p = 0.0f;
+	if (p > 1.0f) p = 1.0f;
+	*outPct = (u8)(p * 100.0f + 0.5f);
+	return true;
+#endif
 }
 #define CHECK_IDLE_EN (checkIdle())
 u8 maxFireAngleSetting = 0;
@@ -84,11 +229,31 @@ void sendEdtStart() {
 void setIdleState(MenuItem *_item) {
 	mainMenu->search("idleRpm")->setVisible(idleEnabled);
 	mainMenu->search("previewIdlingInMenu")->setVisible(idleEnabled);
+	// Only show ML knobs when ML idling is selected.
+	mainMenu->search("mlIdleMode")->setVisible(idleEnabled >= 8);
+	mainMenu->search("mlThresh")->setVisible(idleEnabled >= 8);
 	DEBUG_PRINTF("idle: %d\n", idleEnabled);
 }
 
 void __not_in_flash_func(runOperationSm)() {
 	static bool firstRun = true;
+
+#if HW_VERSION == 2
+	// USB service mode:
+	// When a host has opened the CDC port (DTR asserted), keep it in a safe state so MLDUMP / model
+	// upload is reliable and motors can't spin.
+	// When the host disconnects, return through STATE_SETUP so ESC comm/EDT is re-established.
+	static bool usbPrev = false;
+	const bool usbNow = ::usbCdcActive();
+	if (usbNow && operationState != STATE_USB) {
+		operationState = STATE_USB;
+	}
+	if (!usbNow && usbPrev && operationState == STATE_USB) {
+		operationState = STATE_SETUP;
+	}
+	usbPrev = usbNow;
+#endif
+
 	if (forceNewOpState != 0xFFFFFFFFUL) {
 		operationState = forceNewOpState;
 		lastState = forceNewOpState;
@@ -98,15 +263,36 @@ void __not_in_flash_func(runOperationSm)() {
 	}
 	u32 opStateTime = opStateTimer;
 	switch (operationState) {
+	case STATE_USB: {
+		// Service mode: hard-disable any firing and keep everything safe.
+		// NOTE: We don't early-return from runOperationSm; we still want the common
+		// tail logic (sendThrottles, state timers, etc.).
+		if (firstRun) {
+			retractPusher();
+		}
+		triggerUpdateFlag = false;
+		setAllThrottles(0);
+	} break;
 	case STATE_SETUP: {
 		static i32 goodSequences = -8;
 		static u8 goodSequenceProgress = 0;
 		static u8 edtProgress = 0;
 		static u8 bootGraceTimeProgress = 0;
 		static elapsedMillis escCheckTimer = 0;
+		static bool printedEdtMsg = false;
+		static bool printedTrigMsg = false;
 #if HW_VERSION == 2
 		if (firstRun) {
 			ledSetMode(LED_MODE::RAINBOW, LIGHT_ID::BOOT, 10000);
+			// Re-entering setup (e.g. after USB service mode): restart the setup gating so
+			// ESC comm/EDT gets re-established cleanly.
+			goodSequences = -8;
+			goodSequenceProgress = 0;
+			edtProgress = 0;
+			bootGraceTimeProgress = 0;
+			escCheckTimer = 0;
+			printedEdtMsg = false;
+			printedTrigMsg = false;
 		}
 #endif
 		// After 3 good sequences (total 1.5s), we can move on. A good sequence has at least one successful bidir dshot response like status
@@ -138,7 +324,6 @@ void __not_in_flash_func(runOperationSm)() {
 			gestureUpdated = false;
 			edtProgress = 0;
 			bool escStatusOk = true;
-			static bool printedEdtMsg = false;
 			for (u8 i = 0; i < 4; i++) {
 				if (escStatusCount[i] >= 2)
 					edtProgress += 8;
@@ -149,7 +334,6 @@ void __not_in_flash_func(runOperationSm)() {
 				addBootMsg("EDT found");
 				printedEdtMsg = true;
 			}
-			static bool printedTrigMsg = false;
 			if (
 				goodSequences >= 6 && bootTimer > 3000 && !triggerState && escStatusOk) {
 				operationState = bootUnlockNeeded ? STATE_SAFE : STATE_OFF;
@@ -249,7 +433,12 @@ void __not_in_flash_func(runOperationSm)() {
 		// go to off or idle state when profile is selected
 		// show profile selection on the screen
 		if (CHECK_IDLE_EN) {
+#if HW_VERSION == 2
+			const i32 target = (idleEnabled >= 8) ? mlIdleTargetRpm : idleRpm;
+			pidLoop(target, target);
+#else
 			pidLoop(idleRpm, idleRpm);
+#endif
 		} else {
 			resetPid();
 			setAllThrottles(0);
@@ -396,7 +585,12 @@ void __not_in_flash_func(runOperationSm)() {
 #endif
 
 		if (CHECK_IDLE_EN) {
+#if HW_VERSION == 2
+			const i32 target = (idleEnabled >= 8) ? mlIdleTargetRpm : idleRpm;
+			pidLoop(target, target);
+#else
 			pidLoop(idleRpm, idleRpm);
+#endif
 			if (inactivityTimer > 1000 * 60 * inactivityTimeout && inactivityTimeout) setAllThrottles(0);
 		} else {
 			setAllThrottles(0);
@@ -537,7 +731,14 @@ void __not_in_flash_func(runOperationSm)() {
 			progress = 0;
 		else
 			progress -= revAfterFire;
-		i32 finalRpm = idleEnabled ? idleRpm : 0;
+		i32 finalRpm = 0;
+		if (CHECK_IDLE_EN) {
+#if HW_VERSION == 2
+			finalRpm = (idleEnabled >= 8) ? mlIdleTargetRpm : idleRpm;
+#else
+			finalRpm = idleRpm;
+#endif
+		}
 		i32 targetFront = targetRpm + (finalRpm - targetRpm) * progress / rampdownTime;
 		i32 targetRear = rearRpm + (finalRpm - rearRpm) * progress / rampdownTime;
 		pidLoop(targetFront, targetRear);

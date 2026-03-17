@@ -291,6 +291,9 @@ bool clearEeprom(MenuItem *_item) {
 		EEPROM.write(i, 255);
 	}
 	EEPROM.commit();
+#if HW_VERSION == 2
+	mlInferDeleteUserModel();
+#endif
 	rebootReason = BootReason::CLEAR_EEPROM;
 	rp2040.reboot();
 	return true; // never reached

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'" />
+    <title>Stinger — Personal ML Model</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="topbar">
+      <span class="topbar-brand">STINGER</span>
+      <span class="topbar-version">v2</span>
+    </div>
+
+    <main class="wrap">
+      <header class="hero">
+        <h1>Personalize your Stinger ML idle</h1>
+        <p class="sub">
+          Record one session, plug in, and we'll train <b>both</b> models (LR + MLP) right in your browser,
+          show you what they're predicting, then load your custom weights without reflashing.
+        </p>
+        <div class="pill-row">
+          <span class="pill">Web Serial (Chrome/Edge)</span>
+          <span class="pill">No UF2 for model upload</span>
+          <span class="pill">LR + MLP</span>
+          <span class="pill">No install required</span>
+          <a href="how.html" class="pill pill-link">But how? &rarr;</a>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>1) Update firmware</h2>
+        <ol>
+          <li>Flash the latest V2 firmware: <code>stinger-v2-latest.uf2</code>.</li>
+          <li>Verify in the Device menu you see: <b>Start ML Recording</b> / <b>Stop ML Recording</b>.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2>2) Record a session (about 15 minutes max)</h2>
+        <p>
+          The logger stores IMU + trigger at 100Hz in onboard flash. You have about <b>14–15 minutes</b> per session.
+          Record one continuous session that includes your normal aiming style.
+        </p>
+        <ul>
+          <li><b>Play normally</b>: aim, track targets, move around like you actually do.</li>
+          <li>
+            <b>Include negatives</b>:
+            spend plenty of time aiming/moving <i>without firing</i>. This teaches the model what "not about to shoot" looks like.
+          </li>
+          <li><b>Include positives</b>: fire 50–100+ real shots throughout the session, spaced at least 1 second apart. More shots = better model.</li>
+          <li>
+            <b>Vary your aim direction</b>:
+            shoot at targets in different directions (up, straight, down, left, right). If you only shoot while aiming
+            one way, the model may learn orientation instead of your actual pre-shot motion.
+          </li>
+          <li>
+            <b>Include "fake" shots</b>:
+            make quick aiming motions similar to your pre-shot movement, but <i>don't pull the trigger</i>.
+            This teaches the model to distinguish real intent from similar-looking movement.
+          </li>
+          <li><b>Record 5+ minutes</b>: longer sessions with more variety produce better models. Short recordings (&lt;2 min) tend to overfit.</li>
+        </ul>
+        <div class="callout">
+          Menu → Device → <b>Start ML Recording</b> … play … Menu → Device → <b>Stop ML Recording</b>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>3) Connect &amp; train</h2>
+        <ol>
+          <li>Remove the top panel with the Picatinny rail to expose the USB port.</li>
+          <li>Plug the blaster into your computer via USB.</li>
+          <li>Click the button below — your browser will ask you to select the serial port.</li>
+        </ol>
+        <div class="row">
+          <button id="btnReady" class="primary">Connect to Stinger</button>
+          <button id="btnDisconnect" class="ghost" disabled>Disconnect</button>
+          <button id="btnResetFactory" class="ghost" disabled>Reset to factory model</button>
+        </div>
+        <div id="conn" class="status">Not connected</div>
+
+        <h3>Or: train from saved log files</h3>
+        <p class="sub">
+          Load one or more <code>.bin</code> log files (previously downloaded or shared with you).
+          Multiple files are combined into a single dataset — great for accumulating sessions over time
+          or training on a community dataset.
+        </p>
+        <div class="row">
+          <button id="btnImportLogs" class="ghost">Import .bin log files</button>
+          <input type="file" id="fileInput" accept=".bin" multiple hidden />
+          <span id="importStatus" class="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Progress</h2>
+        <div id="steps" class="steps"></div>
+        <div id="spinner" class="spinner hidden"></div>
+        <div class="row">
+          <button id="btnDownloadTrace" class="ghost" disabled>Download debug trace</button>
+          <button id="btnDownloadLog" class="ghost" disabled>Download raw log (.bin)</button>
+        </div>
+        <div class="log-wrap">
+          <pre id="log" class="log"></pre>
+        </div>
+      </section>
+
+      <section id="results" class="card hidden">
+        <h2>Results</h2>
+        <div id="dataQuality" class="dataQuality"></div>
+        <div id="summary" class="summary"></div>
+
+        <div class="row">
+          <button id="btnLoadModel" class="primary" disabled>All good, load my custom model</button>
+          <button id="btnDownloadModels" class="ghost" disabled>Download model files</button>
+        </div>
+        <div id="after" class="afterInline hidden">
+          <div class="afterTextWrap">
+            <div id="afterText" class="afterText"></div>
+          </div>
+          <div class="row">
+            <button id="btnDone" class="primary">Disconnect &amp; go play</button>
+          </div>
+        </div>
+        <p class="sub">
+          Next step: load your personalized weights to the blaster. This does <b>not</b> reflash firmware — it uploads only the model.
+        </p>
+
+        <h3>Training convergence</h3>
+        <p class="sub">Loss should decrease and flatten. If it's still dropping at the end, more training iterations could help.</p>
+        <canvas id="lossCanvas" width="600" height="200" class="lossCanvas"></canvas>
+
+        <h3>Quality check</h3>
+        <p class="sub">
+          These quick metrics are computed on a held-out split of <i>your</i> recording session.
+          If precision is low → too many false positives. If recall is low → it misses shots / predicts late.
+        </p>
+        <div id="metrics" class="metricsGrid"></div>
+
+        <h3>2 good shot examples (LR vs MLP)</h3>
+        <p class="sub">
+          Top plot: probability output of both models. Bottom plot: the 6 IMU axes. Red line is trigger. Gray band is the
+          "prediction window" (100–600ms before trigger).
+        </p>
+        <div id="shotGrid" class="grid"></div>
+        <button id="btnPrintPlots" class="ghost" disabled>Download plots for print (white bg)</button>
+
+      </section>
+
+      <footer class="site-footer">
+        Stinger ML Personaliser &mdash; <a href="https://github.com/Project-Stinger" target="_blank" rel="noopener noreferrer">Project Stinger</a>
+      </footer>
+    </main>
+
+    <div id="nnViz" class="nnViz hidden" aria-hidden="true">
+      <div class="nnVizPanel">
+        <div class="nnVizHeader">
+          <div class="nnVizTitle">Training neural net</div>
+          <div id="nnVizSubtitle" class="nnVizSub">Initializing…</div>
+        </div>
+        <canvas id="nnVizCanvas"></canvas>
+        <div class="nnVizHint">
+          Green = positive weights, Blue = negative weights, Brightness = |weight|.
+          Tip: include "negatives" (aim/move without firing) to reduce false positives.
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

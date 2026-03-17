@@ -13,6 +13,34 @@ u8 profileColor[3] = {255, 255, 255};
 u16 profileColor565 = 0xFFFF;
 bool extendedRpmRange = false;
 
+#if HW_VERSION == 2
+char mlRecordingStatusStr[32] = "ML Recording: OFF";
+MenuItem *mlRecordingStatusItem = new MenuItem(MenuItemType::INFO, "mlRecordingStatus", mlRecordingStatusStr);
+MenuItem *mlRecordingStartItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStart", "Start ML Recording", "Start recording IMU data to flash for ML training datasets");
+MenuItem *mlRecordingStopItem = new MenuItem(MenuItemType::ACTION, "mlRecordingStop", "Stop ML Recording", "Stop recording (flushes remaining buffered samples when safe)");
+const char mlIdleModeStrings[2][9] = {"Binary", "Dynamic"};
+const char idleStrings[10][9] = {
+	"Off",
+	"Always",
+	"+/- 10°",
+	"+/- 15°",
+	"+/- 20°",
+	"+/- 25°",
+	"+/- 30°",
+	"+/- 35°",
+	"ML:LR",
+	"ML:MLP",
+};
+const char fireAngleStrings[6][9] = {
+	"40°",
+	"50°",
+	"60°",
+	"70°",
+	"80°",
+	"No limit",
+};
+#endif
+
 u8 rotationTickSensitivity = 0;
 const char rotationSensitivityStrings[3][10] = {"Slow", "Medium", "Fast"};
 
@@ -201,7 +229,9 @@ void initMenu() {
 #if HW_VERSION == 1
 		->addChild(new MenuItem(&idleEnabled, false, EEPROM_POS_IDLE_ENABLED, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
 #elif HW_VERSION == 2
-		->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 7, (const char *)idleStrings, 9, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+		->addChild(new MenuItem(&idleEnabled, 0, EEPROM_POS_IDLE_ENABLED, 9, (const char *)idleStrings, 9, true, "idleEn", "Idling", "Leave motors running during idle state, decreases rampup time"))
+		->addChild(new MenuItem(&mlIdleMode, 1, EEPROM_POS_ML_IDLE_MODE, 1, (const char *)mlIdleModeStrings, 9, true, "mlIdleMode", "ML Idle Mode", "Binary = idle on/off. Dynamic = scale RPM with model probability."))
+		->addChild(new MenuItem(VariableType::U8, &mlThresholdPct, 50, 1, 5, 95, 1, 0, EEPROM_POS_ML_THRESHOLD_PCT, true, "mlThresh", "ML Threshold %", "Probability threshold. Lower = earlier/more aggressive idling."))
 #endif
 #ifdef USE_TOF
 		->addChild(new MenuItem(&idleOnlyWithMag, true, EEPROM_POS_IDLE_ONLY_WITH_MAG, false, "idleOnlyWithMag", HW_VERSION == 2 ? "Idle only with mag" : "No mag no idle", "Preview the idling RPM in the menu"))
@@ -329,6 +359,11 @@ void initMenu() {
 		->addChild(hardwareMenu)
 		->addChild(new MenuItem(MenuItemType::CUSTOM, "docs", "Documentation"))
 		->addChild(firmwareInfoMenu)
+#if HW_VERSION == 2
+		->addChild(mlRecordingStatusItem)
+		->addChild(mlRecordingStartItem)
+		->addChild(mlRecordingStopItem)
+#endif
 		->addChild(resetMenu);
 	bootScreen
 		->addChild(new MenuItem(deviceName, 16, "Stinger", EEPROM_POS_DEVICE_NAME, false, "deviceName", "Device Name"))
@@ -504,6 +539,35 @@ void initMenu() {
 		->setOnEnterFunction(enableTournamentMode)
 		->setVisible(false);
 #if HW_VERSION == 2
+	if (mlRecordingStartItem) {
+		mlRecordingStartItem->setOnEnterFunction([](MenuItem *_item) -> bool {
+			mlLogStartRecording();
+			return false;
+		});
+	}
+	if (mlRecordingStopItem) {
+		mlRecordingStopItem->setOnEnterFunction([](MenuItem *_item) -> bool {
+			mlLogStopRecording();
+			return false;
+		});
+	}
+	deviceMenu->setCustomLoop([](MenuItem *item) -> bool {
+		static bool initialized = false;
+		static bool lastActive = false;
+		const bool active = mlLogIsActive();
+		if (!initialized) {
+			initialized = true;
+			lastActive = !active; // force first update
+		}
+		if (active != lastActive) {
+			lastActive = active;
+			snprintf(mlRecordingStatusStr, sizeof(mlRecordingStatusStr), "ML Recording: %s", active ? "ON" : "OFF");
+			if (mlRecordingStartItem) mlRecordingStartItem->setVisible(!active);
+			if (mlRecordingStopItem) mlRecordingStopItem->setVisible(active);
+			item->triggerFullRedraw();
+		}
+		return true;
+	});
 	mainMenu->search("ledBrightness")
 		->setOnEnterFunction(onBrightnessEnter)
 		->setOnExitFunction(onBrightnessExit)
